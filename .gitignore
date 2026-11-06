@@ -2,3 +2,7 @@
 *.o
 *.tar.gz
 *.zip
+/tests/test-filter
+/tests/__pycache__/
+/tests/test-input
+/tests/palmreject-analyzed
