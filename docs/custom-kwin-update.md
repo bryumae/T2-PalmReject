@@ -20,6 +20,7 @@ cd "$HOME/Documents/T2-PalmReject"
 rpm -q kwin kwin-common kwin-libs libinput
 rpm -q kwin-devel kwin-doc
 git status --short
+sudo systemctl stop palmreject.service
 sudo systemctl stop palmreject-trial.service
 ```
 
@@ -275,6 +276,7 @@ build and test logs, exact RPM hashes and rollback files together. An old
 Stop any trial and save your work. Install the three reviewed runtime RPMs:
 
 ```sh
+sudo systemctl stop palmreject.service
 sudo systemctl stop palmreject-trial.service
 sudo dnf install \
   "$kwin_update_dir/RPMS/x86_64/kwin-${kwin_custom_nvr}.x86_64.rpm" \
@@ -303,6 +305,7 @@ For a custom release with a `palmreject` suffix, its same-base stock release is 
 downgrade. Replace the placeholders with that stock version:
 
 ```sh
+sudo systemctl stop palmreject.service
 sudo systemctl stop palmreject-trial.service
 sudo dnf downgrade \
   /absolute/path/to/stock-directory/kwin-X.Y.Z-R.fc44.x86_64.rpm \
@@ -319,4 +322,6 @@ compatible with the installed KDE/Qt stack. Do not blindly install the original
 
 With stock KWin, leave custom filtering stopped until a compatible cancellation
 integration is available. This update process does not create a boot service or
-an automatic rebuild service.
+an automatic rebuild service. For permanent PalmReject operation, stop its
+supervisor before package changes and refresh its rollback set after the update;
+see [installation](palmreject.md#permanent-installation).

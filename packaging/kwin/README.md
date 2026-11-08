@@ -50,8 +50,9 @@ including drag lock; releasing an item can drop it at its current position.
 Previously completed actions cannot be undone. The filter keeps its global palm
 lock until physical contacts and buttons release.
 
-There is no automatic patch-rebase/rebuild service or permanent PalmReject boot
-service in this checkout. A later stock KWin update can remove the interface;
+There is no automatic patch-rebase/rebuild service. A separate
+[installer](../../docs/palmreject.md#permanent-installation) enables session-aware
+PalmReject startup at boot/login. A later stock KWin update can remove the interface;
 filtered startup must then fail before grabbing input. Rebase and retest against
 the new sources rather than indefinitely freezing desktop updates.
 

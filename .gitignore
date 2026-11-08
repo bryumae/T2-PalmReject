@@ -26,3 +26,6 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Machine-specific installation and session notes.
+/DEVICE-STATUS.local.md

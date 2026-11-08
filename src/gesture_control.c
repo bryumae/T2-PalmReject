@@ -38,7 +38,8 @@ int gesture_listen(const char *directory, gid_t group)
     int fd = socket(AF_UNIX, SOCK_SEQPACKET|SOCK_NONBLOCK|SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
     /* The launcher prepares this root-owned directory with the session group.
-     * The service has no CAP_CHOWN, so the socket inherits that group (setgid). */
+     * With no CAP_CHOWN, the socket gets that group either from the trial's
+     * setgid directory or from the persistent worker's primary group. */
     /* Make the socket group-writable from creation, so a helper racing bind()
      * cannot encounter a transient EACCES before chmod(). */
     mode_t previous_mask=umask(0007);

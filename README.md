@@ -6,19 +6,57 @@ drivers are deliberately rejected. Derived from
 [r2car/T2-PalmReject](https://github.com/r2car/T2-PalmReject), reviewed at
 `75b31901cf9e4c1e9336c51fc61347d988af5fe4`.
 
+## Supported environment
+
+This adaptation targets the Apple T2 trackpad identity and driver listed above.
+It uses Linux evdev/uinput, libevdev, libinput and systemd. Filtered operation also
+requires KDE Wayland, Python D-Bus bindings and the companion KWin patch. The
+packaging recipe is pinned to **Fedora kwin-6.8.2-3.fc44**; a different KWin base
+requires source review, patch adaptation and testing. This is not a general-purpose
+palm-rejection tool for arbitrary touchpads or desktops.
+
 ## Current status
 
-Custom KWin **6.8.2-3.palmreject1.fc44 is installed and running**, and a filtered
-trial was active in the [2026-11-07 validation](docs/kwin-validation-2026-11-07.md).
-PalmReject automated tests and static analysis passed; the custom KWin build and
-isolated tests passed. **Complete desktop acceptance remains unfinished**,
-including drag-lock cancellation, recovery and screen sharing. Input and rendering
-warnings remain unresolved. These observations are dated evidence, not a promise
-that every desktop feature works or a live service-status display.
+Implemented features include validated device discovery, read-only observation,
+calibration profiles, unfiltered forwarding, global palm rejection and a bounded
+manual launcher, plus persistent login/resume operation. The KWin integration implements tap/drag cancellation while
+preserving tapping preferences and the virtual device.
 
-PalmReject is launched manually for a bounded duration. There is no persistent
-PalmReject installer, boot activation or automatic resume/rebuild service here.
-Installing custom KWin and launching PalmReject are separate operations.
+Automated PalmReject tests, static analysis, the custom KWin package build and
+isolated KWin tests have passed; see the
+[dated validation report](docs/kwin-validation-2026-11-07.md) for evidence and scope.
+**Complete desktop acceptance remains unfinished**, including drag-lock
+cancellation, input recovery and screen sharing. Reported input and rendering
+warnings remain unresolved. Passing automated checks does not establish that all
+real-desktop behavior is correct.
+
+Simultaneous pointing with a resting palm is unsupported. The installer enables
+session-aware filtering at login and restores a healthy running session after
+suspend. Runtime failures release input and stay stopped until a new login or
+manual restart. There is no automatic KWin rebuild service. Installing custom
+KWin and launching PalmReject are separate operations.
+
+## Getting started
+
+Build as your ordinary user after installing the dependencies listed in the
+[PalmReject guide](docs/palmreject.md#dependencies-and-local-build):
+
+```sh
+make
+make test
+make analyze
+```
+
+Next, follow that guide to discover the trackpad, collect labeled observations
+and create a measured calibration profile. The example profile is intentionally
+invalid until edited; there are no universal threshold defaults. Live modes use
+`scripts/trial.sh`, with a default duration of 60 seconds and an explicit recovery
+acknowledgment. Test passthrough and physical-input recovery before filtering.
+Filtering requires the [custom KWin integration](packaging/kwin/README.md).
+After supervised checks, use the [permanent installation procedure](docs/palmreject.md#permanent-installation)
+to install root-owned copies and enable `palmreject.service`. The uninstaller
+restores verified matching stock KWin by default; `--keep-custom-kwin` removes
+PalmReject alone.
 
 ## Guides
 
@@ -40,7 +78,7 @@ Physical T2 trackpad → PalmReject classifier → virtual touchpad → KWin/lib
 ```
 
 PalmReject validates and exclusively grabs only the physical trackpad during live
-trials. It clones measured capabilities into **PalmReject MacBookPro16,1 Touchpad**;
+operation. It clones measured capabilities into **PalmReject MacBookPro16,1 Touchpad**;
 KWin/libinput supplies pointer motion, tapping, scrolling and desktop gestures.
 Probe/observation never grab input or create a virtual device. Passthrough forwards
 without palm classification. Filtering requires a measured calibration profile
@@ -55,13 +93,14 @@ virtual device stays connected. A cancelled drag can drop an item at its current
 position; cancellation cannot undo actions already delivered to applications.
 Missing integration or a cancellation failure ends filtering.
 
-The separate T2 force-click virtual keyboard and keyd are outside this path.
-PalmReject neither reads that keyboard nor changes its service or settings;
+Separate T2 force-click virtual keyboards and keyd are outside this path.
+PalmReject neither reads those keyboards nor changes their services or settings;
 force-click actions are not covered by the virtual touchpad's cancellation.
 
-The launcher already creates a **temporary systemd service** named
+The trial launcher creates a **temporary systemd service** named
 `palmreject-trial.service`, with device restrictions and an independent duration
-limit. `journalctl` reads its logs; it does not launch it. Stop/exit releases the
+limit. Permanent installation uses `palmreject.service` to supervise the restricted
+`palmreject-input.service` and the desktop-user helper, without a trial expiry. `journalctl` reads its logs; it does not launch it. Stop/exit releases the
 physical grab. Unrecoverable output errors release physical input; synchronization
 loss resets virtual state and waits for idle. Recovery still needs hands-on checks.
 
@@ -69,7 +108,7 @@ loss resets virtual state and waits for idle. Recovery still needs hands-on chec
 
 | Path | Role |
 | --- | --- |
-| `README.md` | Entry point and current status. |
+| `README.md` | Project overview, supported environment and feature status. |
 | `docs/palmreject.md` | Local build, calibration and manual operation. |
 | `docs/custom-kwin-build-test-install.md` | Pinned custom KWin build, install and acceptance procedure. |
 | `docs/custom-kwin-update.md` | Fedora updates, patch rebasing and new builds. |
@@ -87,29 +126,41 @@ loss resets virtual state and waits for idle. Recovery still needs hands-on chec
 | `scripts/trial.sh` | Bounded transient-service launcher and cleanup. |
 | `scripts/detect-trackpad.sh` | Prints a validated physical node using the built program. |
 | `scripts/gesture-helper.py` | Unprivileged bridge to device-scoped KWin D-Bus cancellation. |
+| `scripts/service-manager.py` | Session/sleep lifecycle, restricted worker and helper supervision. |
+| `scripts/manage-installation.py` | Manifest-based installation, upgrade, removal and verified stock rollback. |
+| `systemd/palmreject.service` | Root supervisor service enabled by installation. |
 | `scripts/build-kwin.sh` | Pinned KWin RPM build wrapper, four jobs by default. |
 | `packaging/kwin/README.md` | Integration design and build references. |
 | `packaging/kwin/prepare.py` | Verifies pinned source RPM and prepares custom spec/source RPM. |
 | `packaging/kwin/0001-palmreject-cancel-tap-gestures.patch` | KWin implementation and regression tests. |
 | `tests/test_filter.c`, `tests/test_input.c`, `tests/test_gesture.c` | Offline C tests. |
 | `tests/test_cli.py`, `tests/test_helper.py` | CLI and helper tests. |
+| `tests/test_service.py`, `tests/test_installation.py` | Mocked lifecycle and temporary-root installation/rollback tests. |
 | `config/profile.example` | Trackable, deliberately invalid calibration template. |
 | `config/` personal profiles | Private local configuration; ignored by Git. |
 | `Makefile` | Local build, tests, analysis and sanitizer targets. |
-| `install.sh`, `uninstall.sh` | Inert compatibility entry points that print guide locations. |
+| `install.sh`, `uninstall.sh` | Installer/uninstaller entry points; both support `--dry-run`. |
 | `.gitignore` | Generated output, personal configuration and editor/cache exclusions. |
 | `CHANGELOG.md`, `VERSION` | Adaptation changes and inherited upstream release metadata. |
 | `LICENSE` | GPL-3.0-only; original notices retained in derived sources. |
 | `palmreject`, `tests/test-filter`, `tests/test-input`, `tests/test-gesture`, `tests/palmreject-analyzed`, `*.o` | Ignored generated executables/objects. |
 | `artifacts/kwin/` | Local source RPM inputs. |
 | `artifacts/kwin-build/` | Generated spec, source, RPMs, logs and original validation manifest. |
-| `artifacts/kwin-build-backup-20261107-193753/` | Preserved approximately 4.8 GB archived build tree and test programs. |
+| `artifacts/kwin-build-backup-*/` | Optional archived build trees and test programs. |
 | `artifacts/kwin-stock/` | Preserved stock rollback RPMs. |
-| `artifacts/kwin-audit-20261107/` | Local audit/test/rendering evidence. |
+| `artifacts/kwin-audit-*/` | Local audit/test/rendering evidence. |
 
 Source, tests, patch, packaging recipe and guides are maintained files. Binaries,
 Python caches, archives and `artifacts/` are generated local output; personal
-profiles are configuration. None of the build artifacts or recovery packages
-were removed by this documentation cleanup. Generated validation manifests are
+profiles are configuration. Build artifacts and recovery packages are local files,
+not prerequisites supplied by a fresh clone. Generated validation manifests are
 **not automatically refreshed by rebuilding**: record new hashes/results before
 using an old manifest to assess new RPMs.
+
+Machine-specific installation details and session observations can be kept in
+`DEVICE-STATUS.local.md`, which is ignored by Git. The dated validation report is
+retained as historical test evidence rather than a live status report.
+
+---
+
+Note: ChatGPT was used to assist with development and documentation of this repository.

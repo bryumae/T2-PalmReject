@@ -175,11 +175,11 @@ static int virtual_path(const char *sys_path, char path[PATH_MAX])
      * open and classification after the allowlist update. */
     return 0;
 }
-static int announce(const char *directory, const char *path)
+static int announce_file(const char *directory, const char *name, const char *path)
 {
     if (!directory) return 0;
     char file[PATH_MAX];
-    snprintf(file, sizeof(file), "%s/virtual-device", directory);
+    snprintf(file, sizeof(file), "%s/%s", directory, name);
     int fd = open(file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) return -1;
     size_t len = strlen(path);
@@ -189,10 +189,12 @@ static int announce(const char *directory, const char *path)
 }
 static void usage(void)
 {
-    puts("Usage: palmreject MODE [--device PATH] [--config FILE] [--state-dir DIR] [--session-uid UID] [--duration SECONDS]\n"
+    puts("Usage: palmreject MODE [--device PATH] [--config FILE] [--state-dir DIR] [--session-uid UID] [--duration SECONDS | --persistent]\n"
          "Modes: --probe | --observe | --passthrough | --filter\n"
-         "Probe/observe never grab or create devices. Live modes require the trial launcher.\n"
-         "Filtering requires a calibrated profile. Live duration: 1-86400 seconds, default 60.");
+         "Probe/observe never grab or create devices. Live modes require a supervised launcher.\n"
+         "Filtering requires a calibrated profile. Trial duration: 1-86400 seconds, default 60.\n"
+         "--persistent is for the installed filtering service only.\n"
+         "palmreject --check-config FILE validates a profile without accessing devices.");
 }
 int main(int argc, char **argv)
 {
@@ -200,11 +202,22 @@ int main(int argc, char **argv)
     const char *device = NULL, *config = NULL, *state_dir = NULL, *session_uid = NULL;
     const char *duration_arg=NULL;
     long duration=60;
+    int persistent=0;
     uid_t session_user_id=0;
     gid_t session_group=0;
+    if (argc == 3 && !strcmp(argv[1], "--check-config")) {
+        struct profile checked;
+        if (profile_read(argv[2], &checked)) { perror("Invalid profile"); return 2; }
+        puts("Profile valid.");
+        return 0;
+    }
     for (int i = 1; i < argc; i++) {
         int next = NONE;
         if (!strcmp(argv[i], "--help")) { usage(); return 0; }
+        if (!strcmp(argv[i], "--persistent")) {
+            if (persistent) { usage(); return 2; }
+            persistent=1; continue;
+        }
         if (!strcmp(argv[i], "--probe")) next = PROBE;
         else if (!strcmp(argv[i], "--observe")) next = OBSERVE;
         else if (!strcmp(argv[i], "--passthrough")) next = PASSTHROUGH;
@@ -223,6 +236,7 @@ int main(int argc, char **argv)
         mode = next;
     }
     if (mode == NONE || (mode == FILTER && !config) || (mode == PASSTHROUGH && config)) { usage(); return 2; }
+    if (persistent && (mode != FILTER || duration_arg)) { usage(); return 2; }
     if (duration_arg) {
         if (mode < PASSTHROUGH || strlen(duration_arg) > 5 ||
             duration_arg[0] < '1' || duration_arg[0] > '9' ||
@@ -233,7 +247,7 @@ int main(int argc, char **argv)
     if (mode == FILTER) {
         char *end;
         if (!session_uid || !*session_uid || strspn(session_uid, "0123456789") != strlen(session_uid)) {
-            fputs("Filtering requires --session-uid from the trial launcher.\n", stderr); return 2;
+            fputs("Filtering requires --session-uid from a supervised launcher.\n", stderr); return 2;
         }
         errno=0;
         unsigned long uid=strtoul(session_uid, &end, 10);
@@ -247,7 +261,7 @@ int main(int argc, char **argv)
     struct profile profile;
     if (config && profile_read(config, &profile)) { perror("Invalid profile"); return 2; }
     if (mode >= PASSTHROUGH && !state_dir) {
-        fputs("Use scripts/trial.sh: live modes require supervised service execution.\n", stderr); return 2;
+        fputs("Use scripts/trial.sh or the installed service: live modes require supervision.\n", stderr); return 2;
     }
     char path[PATH_MAX];
     struct libevdev *dev = NULL;
@@ -287,7 +301,7 @@ int main(int argc, char **argv)
         while (!stopping && milliseconds() < ready_deadline) {
             if (!virtual_path(sys_path, vpath)) {
                 if (!announced) {
-                    if (announce(state_dir, vpath)) { status = 1; goto done; }
+                    if (announce_file(state_dir, "virtual-device", vpath)) { status = 1; goto done; }
                     announced = 1;
                     printf("Virtual event node announced: %s; waiting for libinput recognition.\n",vpath);
                 }
@@ -319,7 +333,7 @@ int main(int argc, char **argv)
         int rc;
         while ((rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &event)) >= 0) {
             if (rc == LIBEVDEV_READ_STATUS_SYNC && sync_device(dev, 0)) { status = 1; goto done; }
-            if (stopping || milliseconds() >= deadline) goto done;
+            if (stopping || (!persistent && milliseconds() >= deadline)) goto done;
         }
         if (rc != -EAGAIN) { status = 1; goto done; }
         snapshot(dev, &frame);
@@ -330,12 +344,15 @@ int main(int argc, char **argv)
         snapshot(dev, &frame);
         if (!idle(&frame)) { status = 1; goto done; }
         if (filter_frame(&filter, &frame, NULL, x, supported, virtual_touchpad_write, &vfd)) { status = 1; goto done; }
-        printf("Trial active; service and process have independent %ld-second limits.\n",duration);
+        if (persistent) {
+            if (announce_file(state_dir, "ready", "filtering")) { status=1; goto done; }
+            puts("Persistent filtering active; supervised until stopped.");
+        } else printf("Trial active; service and process have independent %ld-second limits.\n",duration);
     }
     int wait_idle = 0;
     unsigned char lifted[MAX_SLOTS]={0};
     int current_slot = libevdev_get_event_value(dev, EV_ABS, ABS_MT_SLOT);
-    while (!stopping && milliseconds() < deadline) {
+    while (!stopping && (persistent || milliseconds() < deadline)) {
         if (mode == FILTER && !gesture_alive(&gestures.control)) {
             fputs("Gesture helper disconnected; releasing physical trackpad.\n", stderr);
             status=1; break;

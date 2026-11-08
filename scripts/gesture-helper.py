@@ -116,10 +116,17 @@ def serve(connection, factory=KWin):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--socket", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--socket")
+    mode.add_argument("--check-session", action="store_true",
+                      help="Check the session KWin owner without creating or grabbing input")
     args = parser.parse_args()
     if os.getuid() == 0:
         parser.error("Run as the selected desktop user, not root")
+    if args.check_session:
+        import dbus
+        dbus.SessionBus().get_name_owner("org.kde.KWin")
+        return
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as connection:
         deadline = time.monotonic() + 10
         while True:

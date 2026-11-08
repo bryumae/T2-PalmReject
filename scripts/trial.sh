@@ -36,6 +36,9 @@ done
 [[ "$mode" != --passthrough || -z "$config" ]] || { usage; exit 2; }
 [[ "$mode" == --filter || -z "$session_uid" ]] || { usage; exit 2; }
 (( EUID == 0 )) || { echo 'Run this launcher through sudo after reviewing/building the source.' >&2; exit 1; }
+umask 077
+exec {input_lock}>/run/palmreject-input.lock
+flock -n "$input_lock" || { echo 'Another PalmReject launcher/service owns the input lifecycle lock.' >&2; exit 1; }
 [[ -x "$root_dir/palmreject" ]] || { echo 'Run make as the ordinary user first.' >&2; exit 1; }
 if [[ "$mode" == --filter ]]; then
     session_uid="${session_uid:-${SUDO_UID:-}}"

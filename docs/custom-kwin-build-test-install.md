@@ -36,6 +36,7 @@ Connect and test a separate USB mouse and keyboard. Save your work before changi
 the desktop packages. Keep this stop command available in another terminal:
 
 ```sh
+sudo systemctl stop palmreject.service
 sudo systemctl stop palmreject-trial.service
 ```
 
@@ -285,6 +286,7 @@ Stop the trial, then downgrade all three runtime packages together:
 
 ```sh
 cd "$HOME/Documents/T2-PalmReject"
+sudo systemctl stop palmreject.service
 sudo systemctl stop palmreject-trial.service
 sudo dnf downgrade artifacts/kwin-stock/kwin{,-common,-libs}-6.8.2-3.fc44.x86_64.rpm
 ```
@@ -299,5 +301,5 @@ updated the desktop to a different upstream version, use its matching stock RPMs
 and the [update guide](custom-kwin-update.md), rather than blindly downgrading to
 6.8.2.
 
-This procedure installs custom KWin only. It does not enable PalmReject at boot;
-permanent activation remains a separate task after host acceptance.
+This procedure installs custom KWin only. After supervised acceptance, follow the
+[permanent PalmReject installation](palmreject.md#permanent-installation) separately.

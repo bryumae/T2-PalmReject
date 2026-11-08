@@ -10,7 +10,7 @@ and open findings, see the [dated validation](kwin-validation-2026-11-07.md).
 ```sh
 ./palmreject --help
 bash scripts/trial.sh --help
-systemctl status palmreject-trial.service --no-pager
+systemctl status palmreject.service palmreject-input.service palmreject-trial.service --no-pager
 journalctl -u palmreject-trial.service -n 100 --no-pager
 rpm -q kwin kwin-common kwin-libs libinput
 ```
@@ -19,6 +19,27 @@ A missing transient unit after launcher cleanup is normal; journal records may
 still exist. Status success means the process ran/exited, not that desktop
 acceptance passed. `journalctl` only reads logs. Use the
 [PalmReject guide](palmreject.md#manual-launch-and-duration) to launch it.
+
+## Permanent supervisor is active but filtering is not
+
+```sh
+systemctl status palmreject.service palmreject-input.service --no-pager
+journalctl -u palmreject.service -u palmreject-input.service -n 100 --no-pager
+```
+
+The supervisor can be waiting for the configured session, paused for sleep/T2
+resume, or holding a failure latch. Read its status text, not just `active`.
+A missing worker while waiting is expected. Missing KWin integration, non-idle
+handover, helper failure or timeout leaves physical input available and does not
+loop retries. After fixing the cause, use `sudo systemctl restart palmreject.service`.
+A new login also permits a new attempt if the supervisor itself remains running.
+
+Stop the supervisor before running trials; both launchers share a lifecycle lock.
+Manual supervisor stops do not automatically resume after sleep. If T2 resume
+services fail or remain active, filtering waits rather than racing the driver.
+Rebuilding/editing the checkout does not update installed copies: rerun the
+[installer](palmreject.md#permanent-installation). Inspect unexpected file changes
+before an upgrade; do not bypass ownership/manifest checks.
 
 ## Sudo fails or the program is missing
 

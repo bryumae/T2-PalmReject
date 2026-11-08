@@ -2,6 +2,12 @@
 
 ## Fedora experimental adaptation
 
+- Add permanent session-aware filtering with an explicit persistent mode, protected
+  worker/helper lifecycle, login activation and ordered suspend/resume handling.
+- Enable root-owned installation/upgrades and manifested removal with signed,
+  matching stock-KWin rollback by default; retain profiles and recovery data.
+- Add offline lifecycle and temporary-root installer/rollback regression tests.
+
 - Reorganize operational guides, troubleshooting, rollback and historical records.
 - Custom KWin is installed and running per the 2026-11-07 validation; full desktop
   acceptance remains unfinished.
@@ -19,8 +25,8 @@
 - Add libevdev synchronization, bounded error recovery and safe palm button release.
 - Replace automatic installation/sleep hooks with isolated 60-second trials.
 - Add implementation plan, security review and offline filter/input/CLI tests.
-- Sanitizer checks and the custom KWin RPM build passed. Hardware acceptance and
-  persistent PalmReject installation remain pending.
+- Sanitizer checks and the custom KWin RPM build passed. Full desktop acceptance
+  remains unfinished.
 
 ## 1.0.0 — inherited upstream history
 

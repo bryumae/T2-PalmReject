@@ -3,11 +3,21 @@
 Stopping PalmReject, removing this checkout and restoring stock KWin are separate
 choices. Preserve the measured profile, stock rollback RPMs, working custom RPMs,
 source packages and logs unless you explicitly choose to remove them. Nothing in
-this guide is executed automatically by `uninstall.sh`.
+the manual rollback section is executed unless you invoke the uninstaller below.
 
 ## Stop PalmReject only
 
-Ctrl+C in the launcher terminal, or:
+For a permanent installation:
+
+```sh
+sudo systemctl stop palmreject.service
+```
+
+To remove boot activation as well, use `sudo systemctl disable --now palmreject.service`.
+Stopping the supervisor also stops its bound input worker/helper; it stays stopped
+until explicitly started or the next boot. Custom KWin can remain installed.
+
+For a trial, Ctrl+C in the launcher terminal, or:
 
 ```sh
 sudo systemctl stop palmreject-trial.service
@@ -18,7 +28,7 @@ cleanup. Lift contacts/buttons and verify physical input using the tested USB
 recovery devices if needed. The launcher normally removes its runtime directory
 and temporary unit properties when it exits. A missing unit is expected after
 cleanup. Custom KWin can remain installed; stopping PalmReject does not require a
-package transaction. No PalmReject boot service is enabled by this checkout.
+package transaction. Trial cleanup does not uninstall a permanent service.
 
 If the launcher was forcibly killed, stop the service first and inspect:
 
@@ -41,22 +51,61 @@ adaptation does not remove or migrate them. Use their original installation
 record/removal procedure; do not delete system files based only on a matching name.
 Do not unload uinput: keyd and force-click software may use it.
 
+## Uninstall the permanent installation
+
+Preview first, then run removal when ready. **The default also restores stock KWin**:
+
+```sh
+sudo ./uninstall.sh --dry-run
+sudo ./uninstall.sh
+```
+
+Without the checkout, the installed equivalent is:
+
+```sh
+sudo /usr/local/sbin/palmreject-uninstall --dry-run
+sudo /usr/local/sbin/palmreject-uninstall
+```
+
+To stop/disable/remove PalmReject while keeping custom KWin:
+
+```sh
+sudo ./uninstall.sh --keep-custom-kwin
+```
+
+The uninstaller validates the root-owned manifest and, for default removal, the
+saved stock RPM hashes/signatures and exact installed desktop base/architecture.
+It disables/stops PalmReject, restores all matching KWin subpackages together
+using the saved local RPMs with repositories disabled, then removes only
+manifested program/unit files. It does not kill KWin or log you out. Log out/in
+normally after package rollback; until then the existing compositor keeps running.
+
+Calibration/settings in `/etc/palmreject/`, records/backups and stock RPMs in
+`/var/lib/palmreject/`, and every checkout/profile/build artifact remain intact.
+Modified installed program/unit files are reported and preserved. If the DNF
+transaction fails, filtering stays disabled and the installed uninstaller/records
+remain for a retry. Dry-run performs no file, service or package changes.
+
+After a later desktop update, stale RPMs are refused rather than downgrading to
+an unrelated base. Refresh the installation with a reviewed matching rollback set,
+or use `--keep-custom-kwin` and follow the manual package rollback procedure below.
+The uninstaller does not remove an unrecognized older upstream installation.
+
 ## Remove local files only
 
-There is no persistent PalmReject system installation from these scripts.
-`install.sh` is inert. To retire this checkout, stop the trial, back up the profile
-and recovery packages outside the checkout, and archive/move the directory first.
-Deleting it would also delete ignored files: Git does not back up those files.
+Stop the trial or permanent service before retiring the checkout. Back up the
+profile and recovery packages outside the checkout, and archive/move the directory
+first. Deleting it also deletes ignored files: Git does not back them up. A permanent
+installation uses independent root-owned copies and must be uninstalled separately.
 
-`make clean` removes the generated PalmReject executable and C test/analyzer
-binaries only; it does not uninstall KWin, remove profiles or remove `artifacts/`.
-Use it only if you explicitly want to discard those local binaries. Keep the
-approximately 4.8 GB archived build tree and logs for recovery/review by default.
-Avoid `git clean -fdx`, which would discard ignored personal files and artifacts.
+`make clean` removes generated PalmReject and C test/analyzer binaries only. It
+does not uninstall the service/KWin or remove profiles/artifacts. Avoid
+`git clean -fdx`, which discards ignored personal files and recovery packages.
 
 ## Restore stock KWin
 
-Save work and stop the trial before changing packages. Use the existing
+Save work and stop/disable the permanent supervisor (or stop the trial) before
+changing packages manually. Use the existing
 [stock rollback procedure](custom-kwin-build-test-install.md#11-restore-stock-kwin-if-necessary)
 for the pinned 6.8.2 base; it restores the matching runtime packages together and
 requires a normal logout/login. It also describes recovery from a text console.

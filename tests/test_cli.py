@@ -1,6 +1,7 @@
 """Offline CLI checks: reject unsafe invocation before attempting device access."""
 import pathlib
 import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -55,10 +56,29 @@ class CLI(unittest.TestCase):
                      'scripts/build-kwin.sh']:
             subprocess.run(['bash', '-n', str(ROOT / file)], check=True)
 
-    def test_legacy_install_dry_run_is_inert(self):
+    def test_install_requires_explicit_profile_and_help_is_inert(self):
         result = subprocess.run(['bash', str(ROOT / 'install.sh'), '--dry-run'], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0)
-        self.assertIn('disabled', result.stdout)
+        self.assertEqual(result.returncode, 2)
+        for script in ('install.sh', 'uninstall.sh'):
+            result = subprocess.run(['bash', str(ROOT / script), '--help'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0)
+            self.assertIn('--dry-run', result.stdout)
+
+    def test_persistent_mode_keeps_trials_bounded(self):
+        for args in [('--persistent',), ('--observe', '--persistent'),
+                     ('--passthrough', '--persistent'),
+                     ('--filter', '--persistent', '--config', '/no-such-file', '--duration', '60'),
+                     ('--filter', '--persistent', '--persistent', '--config', '/no-such-file')]:
+            self.assertEqual(self.run_cli(*args).returncode, 2)
+        with tempfile.NamedTemporaryFile(mode='w') as profile:
+            profile.write('width_threshold=10\ntouch_threshold=20\nedge_width_threshold=5\nedge_percent=10\n')
+            profile.flush()
+            self.assertEqual(self.run_cli('--check-config', profile.name).returncode, 0)
+            # /dev/null is deliberately the only opened descriptor in this check.
+            self.assertEqual(self.run_cli('--filter', '--persistent', '--config', profile.name,
+                                         '--session-uid', '1000', '--state-dir', '/tmp',
+                                         '--device', '/dev/null').returncode, 1)
+        self.assertEqual(self.run_cli('--check-config', str(ROOT / 'config/profile.example')).returncode, 2)
 
     def test_trial_rejects_unacknowledged_recovery(self):
         result = subprocess.run(['bash', str(ROOT / 'scripts/trial.sh'), '--passthrough'], capture_output=True)
