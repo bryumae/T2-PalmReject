@@ -1,15 +1,30 @@
 [Unit]
-Description=T2 PalmReject virtual touchpad palm rejection
-After=systemd-udevd.service
-Wants=systemd-udevd.service
+Description=PalmReject session and suspend supervisor
+After=systemd-logind.service
+Requires=systemd-logind.service
 
 [Service]
-Type=simple
-EnvironmentFile=/etc/palmreject.conf
-ExecStart=/usr/local/bin/palmreject ${PALMREJECT_DEVICE}
-Restart=on-failure
-RestartSec=2
-TimeoutStopSec=5
+Type=notify
+ExecStart=/usr/bin/python3 /usr/local/libexec/palmreject/service-manager.py
+Restart=no
+TimeoutStartSec=15
+TimeoutStopSec=10
+KillMode=control-group
+UMask=0077
+RuntimeDirectory=palmreject
+RuntimeDirectoryMode=0750
+NoNewPrivileges=yes
+ProtectSystem=strict
+# The supervisor/helper needs the dynamically created /run/user/UID/bus.
+# The separate input worker retains ProtectHome=yes.
+ProtectHome=read-only
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/run
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# Calibration template ONLY: deliberately rejected until every value is replaced.
+# This driver's touch-major is proximity-derived, not physical pressure.
+# Use labeled finger, thumb, edge and palm observations on YOUR device.
+width_threshold=REPLACE_WITH_MEASURED_VALUE
+touch_threshold=REPLACE_WITH_MEASURED_VALUE
+edge_width_threshold=REPLACE_WITH_MEASURED_VALUE
+edge_percent=REPLACE_WITH_MEASURED_PERCENT_1_TO_25
