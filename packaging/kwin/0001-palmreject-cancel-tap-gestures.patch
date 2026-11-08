@@ -1,0 +1,277 @@
+--- a/src/backends/libinput/device.h
++++ b/src/backends/libinput/device.h
+@@ -16,6 +16,8 @@
+ #include <KConfigGroup>
+ #include <QEasingCurve>
+ 
++#include <QDBusContext>
++#include <QDBusMessage>
+ #include <QList>
+ #include <QMatrix4x4>
+ #include <QObject>
+@@ -54,7 +56,7 @@
+     libinput_tablet_tool *const m_handle;
+ };
+ 
+-class KWIN_EXPORT Device : public InputDevice
++class KWIN_EXPORT Device : public InputDevice, protected QDBusContext
+ {
+     Q_OBJECT
+     Q_CLASSINFO("D-Bus Interface", "org.kde.KWin.InputDevice")
+@@ -298,6 +300,13 @@
+      * Set the Device to tap to click if @p set is @c true.
+      */
+     void setTapToClick(bool set);
++    // Internal reset; never changes cached preferences or configuration.
++    bool resetTapGestures();
++
++public Q_SLOTS:
++    Q_SCRIPTABLE bool cancelTapGestures();
++
++public:
+     bool tapAndDragEnabledByDefault() const
+     {
+         return defaultValue("TapAndDrag", m_tapAndDragEnabledByDefault);
+@@ -806,6 +815,7 @@
+     static Device *get(libinput_device *native);
+ 
+ Q_SIGNALS:
++    void tapGestureCancellationRequested(const QDBusMessage &request);
+     void tapButtonMapChanged();
+     void calibrationMatrixChanged();
+     void orientationChanged();
+--- a/src/backends/libinput/device.cpp
++++ b/src/backends/libinput/device.cpp
+@@ -21,6 +21,7 @@
+ #include <QDBusArgument>
+ #include <QDBusConnection>
+ #include <QDBusMetaType>
++#include <QMetaMethod>
+ 
+ #include <linux/input.h>
+ 
+@@ -458,7 +459,37 @@
+     QDBusConnection::sessionBus().registerObject(QStringLiteral("/org/kde/KWin/InputDevice/") + m_sysName,
+                                                  QStringLiteral("org.kde.KWin.InputDevice"),
+                                                  this,
+-                                                 QDBusConnection::ExportAllProperties);
++                                                 QDBusConnection::ExportAllProperties | QDBusConnection::ExportScriptableSlots);
++}
++
++bool Device::resetTapGestures()
++{
++    const auto saved = libinput_device_config_tap_get_enabled(m_device);
++    if (saved == LIBINPUT_CONFIG_TAP_DISABLED) {
++        return true;
++    }
++    if (libinput_device_config_tap_set_enabled(m_device, LIBINPUT_CONFIG_TAP_DISABLED) != LIBINPUT_CONFIG_STATUS_SUCCESS) {
++        return false;
++    }
++    // libinput releases tap-generated buttons on disable and neutralizes all
++    // existing contacts on re-enable, including sticky drag-lock state.
++    return libinput_device_config_tap_set_enabled(m_device, saved) == LIBINPUT_CONFIG_STATUS_SUCCESS;
++}
++
++bool Device::cancelTapGestures()
++{
++    if (!m_isVirtual || !isTouchpad() || m_vendor != 0x05ac || m_product != 0x0340
++        || m_name != QStringLiteral("PalmReject MacBookPro16,1 Touchpad")) {
++        return false;
++    }
++    if (!calledFromDBus() || !isSignalConnected(QMetaMethod::fromSignal(&Device::tapGestureCancellationRequested))) {
++        return false;
++    }
++    // Acknowledge only after the compositor thread has delivered releases.
++    // Never block the input thread: shutdown waits for that thread to finish.
++    setDelayedReply(true);
++    Q_EMIT tapGestureCancellationRequested(message());
++    return false; // Ignored by Qt for a delayed D-Bus reply.
+ }
+ 
+ Device::~Device()
+--- a/src/backends/libinput/connection.cpp
++++ b/src/backends/libinput/connection.cpp
+@@ -27,6 +27,7 @@
+ #include "utils/realtime.h"
+ #include "utils/udev.h"
+ 
++#include <QCoreApplication>
+ #include <QDBusConnection>
+ #include <QMutexLocker>
+ #include <QSocketNotifier>
+@@ -269,6 +270,30 @@
+             auto device = new Device(event->nativeDevice());
+             device->moveToThread(thread());
+             m_devices << device;
++
++            // A D-Bus reply is an ordering barrier: consume prior uinput
++            // frames, reset this device, then deliver queued releases before
++            // acknowledging. The caller withholds liftoffs until this returns.
++            connect(device, &Device::tapGestureCancellationRequested, this,
++                    [this, guard = QPointer<Device>(device)](const QDBusMessage &request) {
++                        // D-Bus calls arrive on the input thread. Queue work on
++                        // the compositor thread and reply asynchronously, so
++                        // compositor shutdown cannot deadlock waiting for us.
++                        QMetaObject::invokeMethod(QCoreApplication::instance(), [self = QPointer<Connection>(this), guard, request]() {
++                            bool success = false;
++                            if (self) {
++                                QMutexLocker locker(&self->m_mutex);
++                                self->handleEvent();
++                                self->processEvents();
++                                if (guard && self->m_devices.contains(guard.data())) {
++                                    success = guard->resetTapGestures();
++                                    self->handleEvent();
++                                    self->processEvents();
++                                }
++                            }
++                            QDBusConnection::sessionBus().send(request.createReply(QVariantList{success}));
++                        }, Qt::QueuedConnection);
++                    }, Qt::DirectConnection);
+ 
+             applyDeviceConfig(device);
+             applyScreenToDevice(device);
+--- a/autotests/libinput/mock_libinput.h
++++ b/autotests/libinput/mock_libinput.h
+@@ -28,6 +28,7 @@
+     bool gestureSupported = false;
+     bool switchDevice = false;
+     QByteArray name;
++    QByteArray udevDevpath;
+     QByteArray sysName = QByteArrayLiteral("event0");
+     QByteArray outputName;
+     quint32 product = 0;
+@@ -38,6 +39,7 @@
+     int deviceSizeReturnValue = 0;
+     bool tapEnabledByDefault = false;
+     bool tapToClick = false;
++    QList<libinput_config_tap_state> tapResetCalls;
+     bool tapAndDragEnabledByDefault = false;
+     bool tapAndDrag = false;
+     bool tapDragLockEnabledByDefault = false;
+--- a/autotests/libinput/mock_libinput.cpp
++++ b/autotests/libinput/mock_libinput.cpp
+@@ -83,6 +83,7 @@
+ 
+ enum libinput_config_status libinput_device_config_tap_set_enabled(struct libinput_device *device, enum libinput_config_tap_state enable)
+ {
++    device->tapResetCalls.append(enable);
+     if (device->setTapToClickReturnValue == 0) {
+         device->tapToClick = (enable == LIBINPUT_CONFIG_TAP_ENABLED);
+         return LIBINPUT_CONFIG_STATUS_SUCCESS;
+@@ -1034,7 +1035,7 @@
+ 
+ udev_device *libinput_device_get_udev_device(struct libinput_device *device)
+ {
+-    return nullptr;
++    return device->udevDevpath.isEmpty() ? nullptr : reinterpret_cast<udev_device *>(device);
+ }
+ 
+ double
+@@ -1059,7 +1060,7 @@
+ 
+ const char *udev_device_get_devpath(struct udev_device *device)
+ {
+-    return "";
++    return device ? reinterpret_cast<libinput_device *>(device)->udevDevpath.constData() : "";
+ }
+ 
+ struct libinput_tablet_tool *
+--- a/autotests/libinput/device_test.cpp
++++ b/autotests/libinput/device_test.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include <QDBusConnection>
+ #include <QDBusInterface>
++#include <QDBusPendingReply>
+ #include <QSignalSpy>
+ #include <QTest>
+ 
+@@ -106,6 +107,7 @@
+     void testDisableEventsOnExternalMouse();
+     void testTapToClick_data();
+     void testTapToClick();
++    void testResetTapGestures();
+     void testTapAndDragEnabledByDefault_data();
+     void testTapAndDragEnabledByDefault();
+     void testTapAndDrag_data();
+@@ -1408,6 +1410,63 @@
+     QCOMPARE(dbusProperty<qreal>(d.sysName(), "scrollFactor"), expectedValue);
+ }
+ 
++void TestLibinputDevice::testResetTapGestures()
++{
++    libinput_device native;
++    native.tapFingerCount = 3;
++    native.tapToClick = true;
++    native.tapAndDrag = true;
++    native.tapDragLock = true;
++    Device device(&native);
++    QSignalSpy changed(&device, &Device::tapToClickChanged);
++    QVERIFY(device.resetTapGestures());
++    QCOMPARE(native.tapResetCalls, QList<libinput_config_tap_state>({LIBINPUT_CONFIG_TAP_DISABLED, LIBINPUT_CONFIG_TAP_ENABLED}));
++    QVERIFY(native.tapToClick);
++    QVERIFY(device.isTapToClick());
++    QVERIFY(native.tapAndDrag);
++    QVERIFY(native.tapDragLock);
++    QVERIFY(changed.isEmpty());
++    QVERIFY(!device.cancelTapGestures()); // Ordinary/physical devices rejected.
++
++    native.tapResetCalls.clear();
++    native.setTapToClickReturnValue = 1;
++    QVERIFY(!device.resetTapGestures());
++    QCOMPARE(native.tapResetCalls.size(), 1);
++    QVERIFY(device.isTapToClick());
++
++    native.tapToClick = false;
++    native.tapResetCalls.clear();
++    QVERIFY(device.resetTapGestures());
++    QVERIFY(native.tapResetCalls.isEmpty());
++
++    libinput_device proxy;
++    proxy.name = "PalmReject MacBookPro16,1 Touchpad";
++    proxy.sysName = "event42";
++    proxy.udevDevpath = "/devices/virtual/input/input42";
++    proxy.vendor = 0x05ac;
++    proxy.product = 0x0340;
++    proxy.pointer = true;
++    proxy.tapFingerCount = 3;
++    proxy.tapToClick = true;
++    Device virtualDevice(&proxy);
++    QVERIFY(virtualDevice.metaObject()->indexOfSlot("cancelTapGestures()") >= 0);
++    QVERIFY(!virtualDevice.cancelTapGestures()); // Missing connection handler.
++    connect(&virtualDevice, &Device::tapGestureCancellationRequested, &virtualDevice,
++            [&virtualDevice](const QDBusMessage &request) {
++                QDBusConnection::sessionBus().send(request.createReply(QVariantList{virtualDevice.resetTapGestures()}));
++            }, Qt::DirectConnection);
++    QDBusInterface interface{
++        QStringLiteral("org.kde.kwin.tests.libinputdevice"),
++        QStringLiteral("/org/kde/KWin/InputDevice/event42"),
++        QStringLiteral("org.kde.KWin.InputDevice")};
++    QDBusPendingReply<bool> reply = interface.asyncCall(QStringLiteral("cancelTapGestures"));
++    QTRY_VERIFY_WITH_TIMEOUT(reply.isFinished(), 1000);
++    QVERIFY2(!reply.isError(), qPrintable(reply.error().message()));
++    QVERIFY(reply.value());
++    QVERIFY(proxy.tapToClick);
++    QCOMPARE(proxy.tapResetCalls.size(), 2);
++}
++
+ void TestLibinputDevice::testScrollTwoFinger_data()
+ {
+     QTest::addColumn<bool>("initValue");
+--- a/autotests/CMakeLists.txt
++++ b/autotests/CMakeLists.txt
+@@ -1,3 +1,14 @@
++# Downstream packaging can exercise the libinput device tests without building
++# the unrelated nested-compositor integration suite. Production features stay on.
++option(KWIN_BUILD_PALMREJECT_TESTS_ONLY "Build only libinput unit tests" OFF)
++if(KWIN_BUILD_PALMREJECT_TESTS_ONLY)
++    include(ECMMarkAsTest)
++    add_definitions(-DKWIN_UNIT_TEST)
++    remove_definitions(-DQT_USE_QSTRINGBUILDER)
++    add_subdirectory(libinput)
++    return()
++endif()
++
+ add_definitions(-DKWIN_UNIT_TEST)
+ remove_definitions(-DQT_USE_QSTRINGBUILDER)
+ add_subdirectory(effect)

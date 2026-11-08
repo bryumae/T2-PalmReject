@@ -1,3 +1,7 @@
+> Historical record: statements about installation, activation, defaults and
+> pending checks describe stages of development, not current status. Start with
+> the [README](../../README.md) and [current validation](../kwin-validation-2026-11-07.md).
+
 # Fedora MacBookPro16,1 palm rejection adaptation
 
 ## Status and objective

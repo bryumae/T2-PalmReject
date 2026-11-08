@@ -13,10 +13,13 @@ struct contact {
 struct frame {
     int nslots, button;
     struct contact slots[MAX_SLOTS];
+    unsigned char lifted[MAX_SLOTS];
 };
 struct filter {
     int ids[MAX_SLOTS];
     int locked, block_button;
+    int (*cancel_gestures)(void *);
+    void *cancel_data;
 };
 typedef int (*event_writer)(void *, unsigned int, unsigned int, int);
 int profile_read(const char *path, struct profile *p);

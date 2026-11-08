@@ -2,10 +2,12 @@
 // Copyright (C) 2026 Ryan C.
 #define _GNU_SOURCE
 #include "virtual_touchpad.h"
+#include "gesture_control.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
 #include <limits.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +19,15 @@
 #include <unistd.h>
 
 static volatile sig_atomic_t stopping;
+struct gesture_session {
+    struct gesture_control control;
+    char path[PATH_MAX];
+};
+static int cancel_gestures(void *data)
+{
+    struct gesture_session *session=data;
+    return gesture_request(&session->control, "CANCEL", session->path, 100);
+}
 static void handle_signal(int number) { (void)number; stopping = 1; }
 static long long milliseconds(void)
 {
@@ -58,11 +69,20 @@ static int validate(struct libevdev *dev, int fd)
         if (libevdev_get_abs_info(dev, axis)->resolution <= 0) return -1;
     return 0;
 }
-static int open_device(const char *path, struct libevdev **dev)
+static int open_device(const char *path, struct libevdev **dev, int report_errors)
 {
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
-    if (fd < 0) return -1;
-    if (libevdev_new_from_fd(fd, dev) < 0 || validate(*dev, fd)) {
+    if (fd < 0) {
+        if (report_errors) fprintf(stderr, "Opening %s: %s\n", path, strerror(errno));
+        return -1;
+    }
+    int rc = libevdev_new_from_fd(fd, dev);
+    if (rc < 0) {
+        if (report_errors) fprintf(stderr, "Reading capabilities of %s: %s\n", path, strerror(-rc));
+        libevdev_free(*dev); *dev = NULL; close(fd); return -1;
+    }
+    if (validate(*dev, fd)) {
+        if (report_errors) fprintf(stderr, "Device identity/capability validation failed for %s\n", path);
         libevdev_free(*dev); *dev = NULL; close(fd); return -1;
     }
     return fd;
@@ -71,7 +91,7 @@ static int select_device(const char *override, char path[PATH_MAX], struct libev
 {
     if (override) {
         if (!realpath(override, path)) return -1;
-        return open_device(path, dev);
+        return open_device(path, dev, 1);
     }
     glob_t nodes = {0};
     int selected = -1, matches = 0;
@@ -81,7 +101,7 @@ static int select_device(const char *override, char path[PATH_MAX], struct libev
         /* Inspect sysfs before opening anything: do not open keyboard nodes. */
         if (stat(nodes.gl_pathv[i], &st) || !driver_matches(st.st_rdev)) continue;
         struct libevdev *candidate = NULL;
-        int fd = open_device(nodes.gl_pathv[i], &candidate);
+        int fd = open_device(nodes.gl_pathv[i], &candidate, 0);
         if (fd < 0) continue;
         matches++;
         if (matches == 1) { selected = fd; *dev = candidate; snprintf(path, PATH_MAX, "%s", nodes.gl_pathv[i]); }
@@ -142,11 +162,18 @@ static int virtual_path(const char *sys_path, char path[PATH_MAX])
     glob_t nodes = {0};
     snprintf(pattern, sizeof(pattern), "%s/event*", sys_path);
     int rc = glob(pattern, 0, NULL, &nodes);
-    if (rc || nodes.gl_pathc != 1) { globfree(&nodes); return -1; }
+    if (rc || nodes.gl_pathc != 1) {
+        errno=rc==GLOB_NOMATCH ? ENOENT : EINVAL;
+        globfree(&nodes); return -1;
+    }
     const char *name = strrchr(nodes.gl_pathv[0], '/');
     snprintf(path, PATH_MAX, "/dev/input/%s", name + 1);
     globfree(&nodes);
-    return access(path, F_OK);
+    /* Do not access the device node yet: DevicePolicy=closed denies even the
+     * access() check until the launcher learns this path and grants access.
+     * Sysfs discovery is enough to announce it; libinput verifies the actual
+     * open and classification after the allowlist update. */
+    return 0;
 }
 static int announce(const char *directory, const char *path)
 {
@@ -162,15 +189,19 @@ static int announce(const char *directory, const char *path)
 }
 static void usage(void)
 {
-    puts("Usage: palmreject MODE [--device PATH] [--config FILE] [--state-dir DIR]\n"
+    puts("Usage: palmreject MODE [--device PATH] [--config FILE] [--state-dir DIR] [--session-uid UID] [--duration SECONDS]\n"
          "Modes: --probe | --observe | --passthrough | --filter\n"
          "Probe/observe never grab or create devices. Live modes require the trial launcher.\n"
-         "Filtering requires a calibrated profile. All modes expire after 60 seconds.");
+         "Filtering requires a calibrated profile. Live duration: 1-86400 seconds, default 60.");
 }
 int main(int argc, char **argv)
 {
     enum {NONE, PROBE, OBSERVE, PASSTHROUGH, FILTER} mode = NONE;
-    const char *device = NULL, *config = NULL, *state_dir = NULL;
+    const char *device = NULL, *config = NULL, *state_dir = NULL, *session_uid = NULL;
+    const char *duration_arg=NULL;
+    long duration=60;
+    uid_t session_user_id=0;
+    gid_t session_group=0;
     for (int i = 1; i < argc; i++) {
         int next = NONE;
         if (!strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -179,9 +210,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--passthrough")) next = PASSTHROUGH;
         else if (!strcmp(argv[i], "--filter")) next = FILTER;
         else if ((!strcmp(argv[i], "--device") || !strcmp(argv[i], "--config") ||
-                  !strcmp(argv[i], "--state-dir")) && i + 1 < argc) {
+                  !strcmp(argv[i], "--state-dir") || !strcmp(argv[i], "--session-uid") ||
+                  !strcmp(argv[i], "--duration")) && i + 1 < argc) {
             const char **dest = !strcmp(argv[i], "--device") ? &device :
-                                !strcmp(argv[i], "--config") ? &config : &state_dir;
+                                !strcmp(argv[i], "--config") ? &config :
+                                !strcmp(argv[i], "--session-uid") ? &session_uid :
+                                !strcmp(argv[i], "--duration") ? &duration_arg : &state_dir;
             if (*dest) { usage(); return 2; }
             *dest = argv[++i]; continue;
         } else { usage(); return 2; }
@@ -189,6 +223,27 @@ int main(int argc, char **argv)
         mode = next;
     }
     if (mode == NONE || (mode == FILTER && !config) || (mode == PASSTHROUGH && config)) { usage(); return 2; }
+    if (duration_arg) {
+        if (mode < PASSTHROUGH || strlen(duration_arg) > 5 ||
+            duration_arg[0] < '1' || duration_arg[0] > '9' ||
+            strspn(duration_arg,"0123456789") != strlen(duration_arg)) { usage(); return 2; }
+        duration=strtol(duration_arg,NULL,10);
+        if (duration > 86400) { usage(); return 2; }
+    }
+    if (mode == FILTER) {
+        char *end;
+        if (!session_uid || !*session_uid || strspn(session_uid, "0123456789") != strlen(session_uid)) {
+            fputs("Filtering requires --session-uid from the trial launcher.\n", stderr); return 2;
+        }
+        errno=0;
+        unsigned long uid=strtoul(session_uid, &end, 10);
+        struct passwd *session_user;
+        if (errno || *end || !uid || uid >= (uid_t)-1 || !(session_user=getpwuid((uid_t)uid))) {
+            fputs("Invalid session UID.\n", stderr); return 2;
+        }
+        session_user_id=session_user->pw_uid;
+        session_group=session_user->pw_gid;
+    } else if (session_uid) { usage(); return 2; }
     struct profile profile;
     if (config && profile_read(config, &profile)) { perror("Invalid profile"); return 2; }
     if (mode >= PASSTHROUGH && !state_dir) {
@@ -206,34 +261,58 @@ int main(int argc, char **argv)
         const struct input_absinfo *info = libevdev_get_abs_info(dev, a);
         if (info) { supported[a] = 1; printf("axis=%u min=%d max=%d resolution=%d\n", a, info->minimum, info->maximum, info->resolution); }
     }
-    int status = 0, vfd = -1, grabbed = 0;
+    int status = 0, vfd = -1, grabbed = 0, listener=-1;
+    struct gesture_session gestures={.control={.fd=-1}};
     struct frame frame;
     struct filter filter;
     filter_init(&filter);
+    if (mode == FILTER) {
+        filter.cancel_gestures=cancel_gestures;
+        filter.cancel_data=&gestures;
+    }
     const struct input_absinfo *x = libevdev_get_abs_info(dev, ABS_MT_POSITION_X);
     if (mode == PROBE) goto done;
     struct sigaction action = {.sa_handler = handle_signal};
     sigemptyset(&action.sa_mask);
     if (sigaction(SIGINT, &action, NULL) || sigaction(SIGTERM, &action, NULL)) { status = 1; goto done; }
-    long long deadline = milliseconds() + 60000;
+    long long deadline = milliseconds() + duration * 1000LL;
     if (sync_device(dev, 1)) { status = 1; goto done; }
     if (mode >= PASSTHROUGH) {
         char sys_path[PATH_MAX], vpath[PATH_MAX];
         vfd = virtual_touchpad_create(dev, sys_path, sizeof(sys_path));
         if (vfd < 0) { perror("Creating virtual touchpad"); status = 1; goto done; }
+        printf("Virtual touchpad created: sysfs=%s\n",sys_path);
         long long ready_deadline = milliseconds() + 10000;
-        int ready = 0, announced = 0;
+        int ready = 0, announced = 0, path_error=0;
         while (!stopping && milliseconds() < ready_deadline) {
             if (!virtual_path(sys_path, vpath)) {
                 if (!announced) {
                     if (announce(state_dir, vpath)) { status = 1; goto done; }
                     announced = 1;
+                    printf("Virtual event node announced: %s; waiting for libinput recognition.\n",vpath);
                 }
                 if (virtual_touchpad_ready(vpath)) { ready = 1; break; }
-            }
+            } else path_error=errno;
             usleep(100000);
         }
-        if (!ready) { fputs("Virtual touchpad was not recognized; original input retained.\n", stderr); status = 1; goto done; }
+        if (!ready) {
+            if (!announced)
+                fprintf(stderr,"Virtual event node unavailable under %s: %s\n",sys_path,strerror(path_error));
+            else
+                fprintf(stderr,"Libinput did not recognize announced virtual node %s.\n",vpath);
+            fputs("Virtual touchpad was not recognized; original input retained.\n", stderr);
+            status = 1; goto done;
+        }
+        if (mode == FILTER) {
+            snprintf(gestures.path, sizeof(gestures.path), "%s", vpath);
+            listener=gesture_listen(state_dir, session_group);
+            if (listener < 0 || gesture_accept(listener, session_user_id, &gestures.control, 10000) ||
+                gesture_request(&gestures.control, "HELLO", vpath, 3000)) {
+                fputs("KWin gesture cancellation unavailable; original input retained.\n", stderr);
+                status=1; goto done;
+            }
+            close(listener); listener=-1;
+        }
         /* Consume pending events, grab atomically, then force-sync. If a contact
          * arrived during handover, release immediately instead of forwarding it. */
         struct input_event event;
@@ -251,16 +330,22 @@ int main(int argc, char **argv)
         snapshot(dev, &frame);
         if (!idle(&frame)) { status = 1; goto done; }
         if (filter_frame(&filter, &frame, NULL, x, supported, virtual_touchpad_write, &vfd)) { status = 1; goto done; }
-        puts("Trial active; service and process have independent 60-second limits.");
+        printf("Trial active; service and process have independent %ld-second limits.\n",duration);
     }
     int wait_idle = 0;
+    unsigned char lifted[MAX_SLOTS]={0};
     int current_slot = libevdev_get_event_value(dev, EV_ABS, ABS_MT_SLOT);
     while (!stopping && milliseconds() < deadline) {
+        if (mode == FILTER && !gesture_alive(&gestures.control)) {
+            fputs("Gesture helper disconnected; releasing physical trackpad.\n", stderr);
+            status=1; break;
+        }
         struct input_event event;
         int rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &event);
         if (rc == -EAGAIN || rc == -EINTR) { usleep(5000); continue; }
         if (rc < 0) { fprintf(stderr, "Input error: %s\n", strerror(-rc)); status = 1; break; }
         if (rc == LIBEVDEV_READ_STATUS_SYNC) {
+            if (mode == FILTER && cancel_gestures(&gestures)) { status=1; break; }
             if (vfd >= 0) {
                 memset(&frame, 0, sizeof(frame)); frame.nslots = libevdev_get_num_slots(dev);
                 for (int i = 0; i < frame.nslots; i++) frame.slots[i].id = -1;
@@ -268,6 +353,7 @@ int main(int argc, char **argv)
             }
             if (sync_device(dev, 0)) { status = 1; break; }
             wait_idle = 1;
+            memset(lifted, 0, sizeof(lifted));
             current_slot = libevdev_get_event_value(dev, EV_ABS, ABS_MT_SLOT);
             continue;
         }
@@ -276,14 +362,14 @@ int main(int argc, char **argv)
             if (current_slot < 0 || current_slot >= libevdev_get_num_slots(dev)) { status = 1; break; }
         }
         /* Preserve liftoff even if the same tracking ID is reused in one frame. */
-        if (vfd >= 0 && event.type == EV_ABS && event.code == ABS_MT_TRACKING_ID &&
-            event.value == -1 && filter.ids[current_slot] >= 0) {
-            if (virtual_touchpad_write(&vfd, EV_ABS, ABS_MT_SLOT, current_slot) ||
-                virtual_touchpad_write(&vfd, EV_ABS, ABS_MT_TRACKING_ID, -1)) { status = 1; break; }
-            filter.ids[current_slot] = -1;
+        if (event.type == EV_ABS && event.code == ABS_MT_TRACKING_ID && event.value == -1) {
+            if (current_slot < 0 || current_slot >= libevdev_get_num_slots(dev)) { status=1; break; }
+            lifted[current_slot]=1;
         }
         if (event.type != EV_SYN || event.code != SYN_REPORT) continue;
         snapshot(dev, &frame);
+        memcpy(frame.lifted, lifted, sizeof(lifted));
+        memset(lifted, 0, sizeof(lifted));
         if (!frame_valid(dev, &frame)) { status = 1; break; }
         if (mode == OBSERVE) {
             for (int i = 0; i < frame.nslots; i++) if (frame.slots[i].id >= 0)
@@ -304,12 +390,15 @@ done:
      * descriptor also releases EVIOCGRAB after crashes and SIGKILL. */
     if (grabbed) ioctl(fd, EVIOCGRAB, 0);
     close(fd);
+    if (listener >= 0) close(listener);
     if (vfd >= 0) {
         memset(&frame, 0, sizeof(frame)); frame.nslots = libevdev_get_num_slots(dev);
         for (int i = 0; i < frame.nslots; i++) frame.slots[i].id = -1;
-        (void)filter_frame(&filter, &frame, NULL, x, supported, virtual_touchpad_write, &vfd);
+        if (mode != FILTER || (gestures.control.fd >= 0 && !cancel_gestures(&gestures)))
+            (void)filter_frame(&filter, &frame, NULL, x, supported, virtual_touchpad_write, &vfd);
         virtual_touchpad_destroy(vfd);
     }
+    if (gestures.control.fd >= 0) close(gestures.control.fd);
     libevdev_free(dev);
     return status;
 }

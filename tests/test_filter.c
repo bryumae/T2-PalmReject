@@ -10,6 +10,7 @@
 
 struct output {
     int calls, fail_at, button, touches, pressure, zero_width, minor, orientation, slot, ids[MAX_SLOTS];
+    int cancellations, cancel_fail, cancel_at, liftoffs;
 };
 static int record(void *data, unsigned int type, unsigned int code, int value)
 {
@@ -20,7 +21,10 @@ static int record(void *data, unsigned int type, unsigned int code, int value)
     if (type == EV_ABS && code == ABS_MT_WIDTH_MINOR) o->minor = value;
     if (type == EV_ABS && code == ABS_MT_ORIENTATION) o->orientation = value;
     if (type == EV_ABS && code == ABS_MT_SLOT) o->slot = value;
-    if (type == EV_ABS && code == ABS_MT_TRACKING_ID) o->ids[o->slot] = value;
+    if (type == EV_ABS && code == ABS_MT_TRACKING_ID) {
+        o->ids[o->slot] = value;
+        if (value == -1) o->liftoffs++;
+    }
     if (type == EV_ABS && (code == ABS_MT_PRESSURE || code == ABS_PRESSURE)) o->pressure++;
     if (type == EV_ABS && code == ABS_MT_WIDTH_MAJOR && value == 0) o->zero_width++;
     return 0;
@@ -34,9 +38,53 @@ static struct frame empty_frame(void)
 static const struct profile profile = {3000, 1000, 2000, 10};
 static const struct input_absinfo x = {.minimum = -8000, .maximum = 8000, .resolution = 100};
 static unsigned char supported[ABS_CNT];
+static int cancel(void *data)
+{
+    struct output *o=data;
+    o->cancellations++;
+    o->cancel_at=o->calls;
+    return o->cancel_fail ? -1 : 0;
+}
 static int render(struct filter *state, struct frame *frame, struct output *o, int filtering)
 {
+    state->cancel_gestures=cancel;
+    state->cancel_data=o;
     return filter_frame(state, frame, filtering ? &profile : NULL, &x, supported, record, o);
+}
+static void test_cancellation_order(void)
+{
+    struct frame f=empty_frame();
+    struct filter state;
+    struct output o={0};
+    filter_init(&state);
+    f.slots[0].id=42;
+    assert(!render(&state,&f,&o,1));
+    int before=o.calls;
+    f.slots[0].axes[ABS_MT_WIDTH_MAJOR]=4000;
+    f.lifted[0]=1; /* Same-frame lift/reuse cannot escape before cancellation. */
+    assert(!render(&state,&f,&o,1));
+    assert(o.cancellations==1 && o.cancel_at==before && o.liftoffs==1);
+    assert(!render(&state,&f,&o,1));
+    assert(o.cancellations==1);
+    f=empty_frame();
+    assert(!render(&state,&f,&o,1));
+    f.slots[1].id=43; f.slots[1].axes[ABS_MT_WIDTH_MAJOR]=4000;
+    assert(!render(&state,&f,&o,1));
+    assert(o.cancellations==2);
+
+    filter_init(&state); o=(struct output){.cancel_fail=1};
+    assert(render(&state,&f,&o,1)==-1);
+    assert(o.calls==0 && !state.locked && o.cancellations==1);
+    filter_init(&state);
+    assert(filter_frame(&state,&f,&profile,&x,supported,record,&o)==-1);
+    assert(o.calls==0); /* Missing compositor integration cannot be bypassed. */
+
+    filter_init(&state); o=(struct output){0};
+    f=empty_frame(); f.slots[0].id=42;
+    assert(!render(&state,&f,&o,0));
+    f.lifted[0]=1;
+    assert(!render(&state,&f,&o,0));
+    assert(o.liftoffs==1 && o.ids[0]==42 && o.cancellations==0);
 }
 static void test_shapes(void)
 {
@@ -141,6 +189,6 @@ int main(void)
     supported[ABS_X] = supported[ABS_Y] = supported[ABS_MT_POSITION_X] = 1;
     supported[ABS_MT_POSITION_Y] = supported[ABS_MT_TOUCH_MAJOR] = 1;
     supported[ABS_MT_WIDTH_MAJOR] = supported[ABS_MT_WIDTH_MINOR] = supported[ABS_MT_ORIENTATION] = 1;
-    test_shapes(); test_frames(); test_every_output_failure(); test_profiles();
+    test_shapes(); test_frames(); test_cancellation_order(); test_every_output_failure(); test_profiles();
     puts("filter/config tests passed");
 }

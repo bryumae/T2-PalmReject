@@ -84,6 +84,9 @@ int filter_frame(struct filter *f, const struct frame *frame,
     int count = 0, first = -1;
     for (int i = 0; i < frame->nslots; i++) count += frame->slots[i].id >= 0;
     if (profile && palm_candidate(frame, profile, x)) {
+        /* No liftoff or button output may precede the compositor's reset. */
+        if (!f->locked && (!f->cancel_gestures || f->cancel_gestures(f->cancel_data)))
+            return -1;
         f->locked = 1;
         f->block_button = 1;
     }
@@ -94,6 +97,10 @@ int filter_frame(struct filter *f, const struct frame *frame,
         const struct contact *c = &frame->slots[i];
         int id = suppressed ? -1 : c->id;
         EMIT(EV_ABS, ABS_MT_SLOT, i);
+        if (frame->lifted[i] && f->ids[i] >= 0) {
+            EMIT(EV_ABS, ABS_MT_TRACKING_ID, -1);
+            f->ids[i] = -1;
+        }
         if (f->ids[i] != id) {
             if (f->ids[i] >= 0) EMIT(EV_ABS, ABS_MT_TRACKING_ID, -1);
             if (id >= 0) EMIT(EV_ABS, ABS_MT_TRACKING_ID, id);

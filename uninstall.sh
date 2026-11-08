@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -eu
 cat <<'MESSAGE'
-This adaptation has no persistent installer. Stop a trial with:
-  sudo systemctl stop palmreject-trial.service
-The launcher cleans up its runtime artifacts when it exits.
-An older upstream installation needs its original removal procedure; this script
-will not delete or replace existing system files.
+This compatibility script does not stop services or remove files/packages.
+Read docs/uninstall-rollback.md to stop PalmReject, remove local files or restore
+stock KWin. Preserve calibration profiles and rollback RPMs unless you choose
+otherwise. Custom KWin package instructions: docs/custom-kwin-build-test-install.md.
+Older upstream installations need their original removal procedure.
 MESSAGE

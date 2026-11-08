@@ -23,6 +23,18 @@ static void axis(struct libevdev *dev, unsigned int code, int min, int max)
 }
 int main(void)
 {
+    /* Announcing a sysfs-discovered node must not require access to /dev/input:
+     * the launcher cannot allow it until it has received the announcement. */
+    char directory[]="/tmp/palmreject-virtual-path-XXXXXX";
+    assert(mkdtemp(directory));
+    char child[PATH_MAX], discovered[PATH_MAX];
+    assert(virtual_path(directory,discovered)==-1);
+    snprintf(child,sizeof(child),"%s/event123456789",directory);
+    assert(!mkdir(child,0700));
+    assert(!virtual_path(directory,discovered));
+    assert(!strcmp(discovered,"/dev/input/event123456789"));
+    assert(!rmdir(child));
+    assert(!rmdir(directory));
     struct libevdev *dev = libevdev_new();
     assert(dev);
     axis(dev, ABS_MT_SLOT, 0, 15);

@@ -5,4 +5,24 @@
 /tests/test-filter
 /tests/__pycache__/
 /tests/test-input
+/tests/test-gesture
+/scripts/__pycache__/
+/packaging/kwin/__pycache__/
+/artifacts/
 /tests/palmreject-analyzed
+
+# Personal calibration and recordings; retain the public template.
+/config/*
+!/config/profile.example
+
+# Editor backups and Python-generated caches.
+*~
+*.save
+*.bak
+*.swp
+*.swo
+.#*
+\#*\#
+__pycache__/
+*.py[cod]
+.pytest_cache/

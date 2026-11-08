@@ -1,3 +1,7 @@
+> Historical record: statements about installation, activation, defaults and
+> pending checks describe stages of development, not current status. Start with
+> the [README](../../README.md) and [current validation](../kwin-validation-2026-11-07.md).
+
 # Security review and validation record
 
 ## Reviewed baseline
@@ -71,6 +75,44 @@ No trial may be described as safe or hardware-validated until these gates pass.
 The user selected independent USB mouse and keyboard recovery for live tests.
 The empty capability set may expose host-specific ioctl requirements; if so,
 fail the trial and investigate rather than broadening permissions automatically.
+
+## KWin cancellation implementation (2026-11-07)
+
+The host (outside the agent sandbox) has SELinux **Enforcing**. An audit record
+confirmed the trial binary originally ran as `init_t` and was denied opening
+`event_device_t`. The launcher now labels only its disposable executable copy
+`bin_t`; it does not change enforcement or install policy. Earlier reports of
+Disabled came from the sandbox and do not describe the host's enforcement.
+
+Palm rejection now requires a successful compositor cancellation acknowledgement
+before virtual liftoffs or button changes. A versioned, sequence-checked Unix
+socket protocol links the root filter to an unprivileged session helper. Each
+side checks peer credentials; the helper verifies the exact virtual device and
+pins KWin's D-Bus owner. No input events or profile values are sent to the helper.
+The root filter never accesses the desktop bus. Helper failure ends the trial;
+cancellation has a 100 ms reply limit. Startup negotiation happens before grabbing.
+
+The KWin patch and pinned Fedora source-package recipe are under `packaging/kwin`.
+Normal tapping preferences remain enabled and are not written during cancellation.
+Raw liftoffs are buffered until the physical frame has been classified, including
+same-frame slot replacement. Synchronization loss and orderly filtered shutdown
+also request cancellation; physical-input release takes priority during cleanup.
+
+Normal filter/input/CLI tests, new cancellation-order and Unix socket
+authentication/protocol tests, Python helper tests, and GCC static analysis passed.
+Address/undefined-behavior sanitizer tests passed in a temporary copy outside the
+sandbox (which blocks Unix socket sends). The checkout binary remains a normal,
+uninstrumented build. Fedora source RPM signatures were verified and source
+preparation applies the KWin patch without fuzz. All 307 KWin device-test cases
+passed on an isolated test D-Bus, including the new reset and D-Bus-reply checks.
+The cancellation method queues work on the compositor thread and uses a delayed
+reply, avoiding an input-thread shutdown deadlock. Full KWin RPM packaging and its
+test stage passed. Runtime RPM digests, normalized dependencies, payload paths
+(apart from build-ID links), scriptlets and file capabilities were checked against
+the saved stock packages. A DNF preview upgrades only the three KWin runtime
+packages, with no additional dependency changes. Desktop gesture acceptance is
+still pending.
+No custom KWin package has been installed or running compositor replaced.
 
 ## Deferred after hardware acceptance
 
