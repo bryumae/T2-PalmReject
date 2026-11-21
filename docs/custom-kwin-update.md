@@ -1,7 +1,8 @@
 # Update custom KWin
 
-There is no automatic patch-rebase or rebuild service in this repository. The
-current preparation script accepts only **kwin-6.8.2-3.fc44**. A future Fedora
+For automatic rebuilding and installation on supported Fedora versions, see
+the [opt-in updater](automatic-kwin-updates.md). This guide covers manual review
+and rebasing. The original preparation script accepts only **kwin-6.8.2-3.fc44**. A future Fedora
 KWin update can replace the custom package without carrying its cancellation
 method forward.
 
@@ -299,7 +300,8 @@ version working. Record the new version's actual host results.
 
 ## 11. Roll back a failed custom update
 
-Stop PalmReject first. Restore the **stock RPMs matching the new desktop base**
+Disable the [automatic updater](automatic-kwin-updates.md#disable-or-roll-back)
+if enabled, then stop PalmReject. Restore the **stock RPMs matching the new desktop base**
 that you saved in step 5, together in one transaction, then log out and back in.
 For a custom release with a `palmreject` suffix, its same-base stock release is a
 downgrade. Replace the placeholders with that stock version:
@@ -321,7 +323,6 @@ compatible with the installed KDE/Qt stack. Do not blindly install the original
 6.8.2 packages after a later desktop or Fedora release upgrade.
 
 With stock KWin, leave custom filtering stopped until a compatible cancellation
-integration is available. This update process does not create a boot service or
-an automatic rebuild service. For permanent PalmReject operation, stop its
-supervisor before package changes and refresh its rollback set after the update;
+integration is available. For permanent PalmReject operation, stop its
+supervisor before changing packages manually and refresh its rollback set afterward;
 see [installation](palmreject.md#permanent-installation).

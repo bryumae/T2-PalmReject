@@ -108,7 +108,8 @@ validates the actual KWin owner/interface instead. Check per-session metadata wi
 means stock/old KWin is running or device identity/API checks failed. Confirm all
 runtime packages match. Installing custom RPMs does not replace the running
 compositor: log out/in normally when ready. A later stock update can remove the
-API; follow the [KWin update guide](custom-kwin-update.md). Do not bypass this gate
+API. Use the [automatic updater](automatic-kwin-updates.md) or follow the
+[manual KWin update guide](custom-kwin-update.md). Do not bypass this gate
 or replace the running compositor in place. Probe/observe/passthrough do not need
 the cancellation API.
 

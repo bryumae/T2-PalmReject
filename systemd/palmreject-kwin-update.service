@@ -1,0 +1,15 @@
+[Unit]
+Description=Build and install PalmReject KWin for the installed Fedora release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/systemctl is-enabled --quiet palmreject-kwin-update.timer
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/palmreject/kwin-update.py
+RuntimeDirectory=palmreject-kwin-update
+RuntimeDirectoryMode=0755
+TimeoutStartSec=4h 10min
+UMask=0077
+ProtectHome=yes
+PrivateTmp=yes

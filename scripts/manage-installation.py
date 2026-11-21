@@ -3,9 +3,11 @@
 """Install/remove root-owned PalmReject files; preserve calibration and recovery data."""
 import argparse
 import fcntl
+import grp
 import hashlib
 import json
 import os
+import platform
 import pathlib
 import pwd
 import re
@@ -25,6 +27,16 @@ SETTINGS = '/etc/palmreject/settings.json'
 UNINSTALL = '/usr/local/sbin/palmreject-uninstall'
 FILES = {f'{LIBEXEC}/{name}' for name in ('palmreject', 'gesture-helper.py', 'service-manager.py',
                                         'manage-installation.py')} | {UNIT, PROFILE, SETTINGS, UNINSTALL}
+BUILD_USER = 'palmreject-build'
+BUILD_CACHE = '/var/cache/palmreject-kwin-rpmbuild'
+UPDATE_TIMER = '/etc/systemd/system/palmreject-kwin-update.timer'
+UPDATE_UNITS = (UPDATE_TIMER, '/etc/systemd/system/palmreject-kwin-update.service',
+                '/etc/systemd/system/palmreject-kwin-build.service')
+UPDATE_HOOK = '/etc/dnf/libdnf5-plugins/actions.d/palmreject-kwin-update.actions'
+UPDATE_FILES = {LIBEXEC + '/kwin-update.py', *UPDATE_UNITS, UPDATE_HOOK} | {
+    LIBEXEC + '/kwin/' + name for name in (
+        'build-update.py', 'reviewed-input.json', '0001-palmreject-cancel-tap-gestures.patch')}
+FILES |= UPDATE_FILES
 RUNTIME_UNITS = ('palmreject.service', 'palmreject-input.service', 'palmreject-trial.service')
 PACKAGES = ('kwin', 'kwin-common', 'kwin-libs', 'kwin-devel', 'kwin-doc')
 QF = '%{NAME}|%{EPOCHNUM}|%{VERSION}|%{RELEASE}|%{ARCH}\n'
@@ -71,7 +83,10 @@ def installed_packages(command=execute):
                 raise ValueError(f'Required package not installed: {name}')
             continue
         packages.append(row)
-    bases = {(p['epoch'], p['version'], stock_row(p)['release'], p['arch']) for p in packages}
+    bases = {(p['epoch'], p['version'], stock_row(p)['release']) for p in packages}
+    arch = packages[0]['arch']
+    if any(p['arch'] != arch and (p['name'], p['arch']) != ('kwin-doc', 'noarch') for p in packages):
+        raise ValueError('KWin package architectures do not match')
     if len(bases) != 1:
         raise ValueError('KWin packages do not share the same desktop base/architecture')
     return packages
@@ -158,7 +173,7 @@ class Installation:
             p = self.path(name)
             if p.exists() and (name not in owned or digest(read_regular(p)) != owned[name]['sha256']):
                 raise ValueError(f'Existing/unexpectedly modified file; preserve and inspect: {name}')
-        for directory in (UNIT + '.d',):
+        for directory in (unit + '.d' for unit in (UNIT, *UPDATE_UNITS)):
             if self.path(directory).exists():
                 raise ValueError(f'Existing unmanaged unit overrides: {directory}')
 
@@ -176,14 +191,7 @@ class Installation:
         records = {name: {'sha256': digest(data), 'mode': mode} for name, (data, mode) in payload.items()}
         manifest = {'schema': 1, 'phase': 'installing', 'session_uid': uid, 'files': records,
                     'rollback': [], 'transaction_backups': transaction}
-        for name, (source, row) in rollback.items():
-            data = read_regular(source)
-            # Re-verify the root-owned copy; source files may change during staging.
-            destination = STATE + '/rollback/' + pathlib.Path(source).name
-            self.write(destination, data)
-            if verify_rpm(self.path(destination), self.command) != row:
-                raise ValueError('Rollback package changed during staging')
-            manifest['rollback'].append({'path': destination, 'sha256': digest(data), 'package': row})
+        manifest['rollback'] = self.stage_rollback(rollback)
         self.save(manifest)  # Recovery record exists before installing executable files.
         try:
             for name, (data, mode) in payload.items():
@@ -204,6 +212,18 @@ class Installation:
                 self.save(manifest)
             raise
         return manifest
+
+    def stage_rollback(self, rollback):
+        records = []
+        for source, row in rollback.values():
+            data = read_regular(source)
+            # Re-verify the root-owned copy; source files may change during staging.
+            destination = STATE + '/rollback/' + pathlib.Path(source).name
+            self.write(destination, data)
+            if verify_rpm(self.path(destination), self.command) != row:
+                raise ValueError('Rollback package changed during staging')
+            records.append({'path': destination, 'sha256': digest(data), 'package': row})
+        return records
 
     def rollback_paths(self, manifest, installed):
         saved = manifest.get('rollback', [])
@@ -243,7 +263,7 @@ class Installation:
         return preserved
 
 
-def payload(repository, config, uid):
+def payload(repository, config, uid, auto_update=False):
     files = {}
     for name in ('palmreject', 'gesture-helper.py', 'service-manager.py', 'manage-installation.py'):
         source = repository / ('palmreject' if name == 'palmreject' else 'scripts/' + name)
@@ -252,6 +272,15 @@ def payload(repository, config, uid):
     files[PROFILE] = (read_regular(config), 0o600)
     files[SETTINGS] = ((json.dumps({'session_uid': uid}) + '\n').encode(), 0o600)
     files[UNINSTALL] = (b'#!/bin/sh\nexec /usr/bin/python3 /usr/local/libexec/palmreject/manage-installation.py uninstall "$@"\n', 0o755)
+    if auto_update:
+        for destination in sorted(UPDATE_FILES):
+            if destination == UPDATE_HOOK or destination in UPDATE_UNITS:
+                source = repository / 'systemd' / pathlib.Path(destination).name
+            elif destination.endswith('/kwin-update.py'):
+                source = repository / 'scripts/kwin-update.py'
+            else:
+                source = repository / 'packaging/kwin' / pathlib.Path(destination).name
+            files[destination] = (read_regular(source), 0o644)
     return files
 
 
@@ -296,6 +325,26 @@ def stop_all(command=execute):
         time.sleep(0.2)
 
 
+def provision_builder():
+    nologin = '/usr/sbin/nologin'
+    execute(['systemd-sysusers', '--inline',
+             f'u! {BUILD_USER} - "PalmReject KWin builder" {BUILD_CACHE} {nologin}'])
+    account = pwd.getpwnam(BUILD_USER)
+    group = grp.getgrnam(BUILD_USER)
+    if (group.gr_gid != account.pw_gid or not 0 < account.pw_uid < 1000
+            or not 0 < account.pw_gid < 1000
+            or account.pw_dir != BUILD_CACHE or account.pw_shell != nologin
+            or any(BUILD_USER in group.gr_mem for group in grp.getgrall())):
+        raise ValueError(f'Existing {BUILD_USER} is not a dedicated build account')
+
+
+def stop_updater(manifest):
+    if manifest and UPDATE_TIMER in manifest['files']:
+        # The installation lock excludes a concurrent KWin package transaction.
+        execute(['systemctl', 'disable', '--now', pathlib.Path(UPDATE_TIMER).name])
+        execute(['systemctl', 'stop', 'palmreject-kwin-update.service', 'palmreject-kwin-build.service'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
@@ -304,6 +353,11 @@ def main():
     install.add_argument('--session-uid', type=int, default=int(os.environ.get('SUDO_UID', os.getuid())))
     install.add_argument('--stock-rpm-dir', type=pathlib.Path,
                          default=pathlib.Path(__file__).resolve().parents[1] / 'artifacts/kwin-stock')
+    mode = install.add_mutually_exclusive_group()
+    mode.add_argument('--enable-kwin-updates', dest='auto_update', action='store_true', default=None,
+                      help='Opt in to automatically building and installing matching KWin RPMs')
+    mode.add_argument('--disable-kwin-updates', dest='auto_update', action='store_false',
+                      help='Remove automatic KWin updates from this installation')
     uninstall = sub.add_parser('uninstall', help='Disable/remove PalmReject and restore matching stock KWin')
     uninstall.add_argument('--keep-custom-kwin', action='store_true')
     for command in (install, uninstall):
@@ -326,13 +380,34 @@ def main():
                 raise ValueError(f'Missing dependency: {executable}')
         execute(['/usr/bin/python3', '-I', '-c', 'import dbus; from gi.repository import GLib'])
         execute([str(repository / 'palmreject'), '--check-config', str(args.config)], capture_output=True)
+        auto_update = args.auto_update
+        if auto_update is None:
+            auto_update = bool(old and UPDATE_TIMER in old['files'] and
+                               execute(['systemctl', 'is-enabled', '--quiet', pathlib.Path(UPDATE_TIMER).name],
+                                       check=False).returncode == 0)
         packages = installed_packages()
-        if not all(stock_row(p)['release'] != p['release'] for p in packages):
+        custom = [stock_row(p) != p for p in packages]
+        if any(custom) and not all(custom):
+            raise ValueError('Restore a consistent stock or custom KWin package set before installation')
+        disabling_on_stock = args.auto_update is False and old and UPDATE_TIMER in old['files']
+        if not all(custom) and not auto_update and not disabling_on_stock:
             raise ValueError('Install the matching custom KWin packages first; see the KWin guide')
-        rollback = select_stock(args.stock_rpm_dir, packages)
-        files = payload(repository, args.config, args.session_uid)
+        if auto_update:
+            system = platform.freedesktop_os_release()
+            if (system.get('ID'), system.get('VERSION_ID'), os.uname().machine) != ('fedora', '44', 'x86_64'):
+                raise ValueError('Automatic KWin updates support Fedora 44 x86_64')
+            execute(['/usr/bin/python3', '-I', '-c', 'import libdnf5'])
+            for executable in ('rpmbuild', 'rpmkeys', 'dnf5', 'patch', 'dbus-run-session', 'ctest', 'systemd-sysusers'):
+                if not shutil.which(executable):
+                    raise ValueError(f'Missing KWin build dependency: {executable}')
+        # The updater fetches and records the exact stock rollback set before any
+        # package replacement. On stock KWin no replacement has happened yet.
+        rollback = select_stock(args.stock_rpm_dir, packages) if all(custom) else {}
+        files = payload(repository, args.config, args.session_uid, auto_update)
         instance.conflicts(old)
         print(f'Install {len(files)} root-owned files; configure UID {args.session_uid}; save signed stock RPMs; enable/start palmreject.service.', flush=True)
+        if auto_update:
+            print('Enable automatic KWin builds and installation of validated RPMs.', flush=True)
         if args.dry_run:
             print('Dry run: no files, services or packages changed.')
             return
@@ -342,17 +417,33 @@ def main():
         state = execute(['systemctl', 'show', 'palmreject.service', '-p', 'LoadState', '--value'], capture_output=True).stdout.strip()
         if state != 'not-found' and not old:
             raise ValueError('An unmanaged PalmReject service already exists')
+        if auto_update:
+            provision_builder()
         if state != 'not-found':
             execute(['systemctl', 'stop', 'palmreject.service'])
+        stop_updater(old)
         manifest = instance.install_files(files, rollback, args.session_uid, old)
+        if old:
+            for name in UPDATE_FILES & (old['files'].keys() - files.keys()):
+                instance.path(name).unlink(missing_ok=True)
         execute([LIBEXEC + '/palmreject', '--check-config', PROFILE], capture_output=True)
         if shutil.which('restorecon'):
             execute(['restorecon', '-R', LIBEXEC, '/etc/palmreject', UNIT, UNINSTALL, STATE])
+        if auto_update and shutil.which('restorecon'):
+            execute(['restorecon', *UPDATE_UNITS, UPDATE_HOOK])
         execute(['systemctl', 'daemon-reload'])
         # Stop the old trial only after the complete installation is ready.
         stop_all()
         try:
             execute(['systemctl', 'enable', '--now', 'palmreject.service'])
+            if auto_update:
+                execute(['systemctl', 'enable', '--now', pathlib.Path(UPDATE_TIMER).name])
+            if not all(custom):
+                if auto_update:
+                    print('Stock KWin detected. Automatic rebuild is queued. Log out and back into KDE after it installs.')
+                else:
+                    print('Stock KWin detected. Automatic rebuild disabled. Filtering requires patched KWin.')
+                return
             deadline = time.monotonic() + 95
             while time.monotonic() < deadline:
                 status = execute(['systemctl', 'show', 'palmreject.service', '-p', 'StatusText',
@@ -366,6 +457,7 @@ def main():
             # Installation outside an active graphical session is valid.
             print('Service enabled and waiting for an eligible Wayland session. Check status after login.')
         except Exception:
+            stop_updater(manifest)
             execute(['systemctl', 'stop', 'palmreject.service'])
             manifest['phase'] = 'activation-failed'
             instance.save(manifest)
@@ -378,13 +470,15 @@ def main():
         packages = []
         if not args.keep_custom_kwin:
             packages = installed_packages()
-            paths = instance.rollback_paths(old, packages)
+            if any(stock_row(p) != p for p in packages):
+                paths = instance.rollback_paths(old, packages)
         print('Stop/disable PalmReject; remove manifested program/unit files; preserve profiles, records and RPMs.', flush=True)
         if paths:
             print('Restore verified matching stock KWin packages together; normal logout/login required.', flush=True)
         if args.dry_run:
             print('Dry run: no files, services or packages changed.')
             return
+        stop_updater(old)
         stop_all()
         if paths and any(stock_row(p) != p for p in packages):
             # Keep program, manifest and standalone uninstaller if the transaction fails.
