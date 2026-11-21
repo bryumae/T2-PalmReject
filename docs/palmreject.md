@@ -173,8 +173,8 @@ Permanent operation uses the separate service described below.
 ## Permanent installation
 
 Build/test normally, calibrate, install matching custom KWin, and verify short
-trials and USB recovery devices first. The installer copies reviewed local output;
-it never builds as root, installs dependencies or installs custom KWin for you.
+trials and USB recovery devices first. The installer copies reviewed local output. For automatic KWin builds and
+installation, see the [opt-in updater](automatic-kwin-updates.md).
 Lift all contacts/buttons during handover. From the desktop user's terminal:
 
 ```sh
@@ -263,4 +263,5 @@ editing its profile alone does not update the installation. Unexpectedly modifie
 installed files are preserved and must be inspected before reinstalling; backups
 and manifest records remain available. After a KWin base update, refresh the saved
 rollback set through installation before relying on the uninstaller's package
-rollback. No automatic source update, patch rebase or RPM rebuild is performed.
+rollback when updating manually. The [opt-in updater](automatic-kwin-updates.md)
+refreshes the rollback set when it installs a rebuilt KWin.

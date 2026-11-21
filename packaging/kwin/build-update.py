@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: GPL-3.0-only
+"""Build a verified stock SRPM with the reviewed PalmReject patch, as a nonroot user."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+RECIPE = Path(__file__).resolve().parent
+PATCH = '0001-palmreject-cancel-tap-gestures.patch'
+
+
+def replace_once(text, pattern, replacement):
+    text, count = re.subn(pattern, replacement, text, flags=re.M)
+    if count != 1:
+        raise ValueError(f'Unreviewed Fedora spec layout: {pattern}')
+    return text
+
+
+def custom_spec(text):
+    if re.search(r'^%check\b|^Patch100\s*:', text, re.M | re.I):
+        raise ValueError('Fedora spec already defines %check or Patch100; review required')
+    text = replace_once(text, r'^Release:[ \t]+([0-9]+)%\{\?dist\}$',
+                        r'Release: \1.palmreject1%{?dist}')
+    text = replace_once(text, r'^## proposed patches$', f'Patch100: {PATCH}\n\n## proposed patches')
+    text = replace_once(text, r'^# Base$', '# Base\nBuildRequires: dbus-daemon\n'
+                        'BuildRequires: cmake(Qt6WaylandClientPrivate)')
+    text = replace_once(text, r'^%autosetup -p1$', '%autosetup -p1 -N\n%autopatch -p1 -M 99\n'
+                        f'patch --batch --forward --fuzz=0 -p1 -i %{{PATCH100}}')
+    text = replace_once(text, r'^%cmake_kf6$', '%cmake_kf6 -DBUILD_TESTING=ON '
+                        '-DKWIN_BUILD_PALMREJECT_TESTS_ONLY=ON')
+    return replace_once(text, r'^%install$', "%check\n"
+                        "QT_QPA_PLATFORM=offscreen dbus-run-session -- ctest --test-dir "
+                        "%{_vpath_builddir} -R '^kwin-testLibinputDevice$' --no-tests=error "
+                        "--verbose --output-log palmreject-ctest.log\n"
+                        "grep -F 'PASS   : TestLibinputDevice::testResetTapGestures()' palmreject-ctest.log\n"
+                        "%install")
+
+
+def run(*args):
+    subprocess.run(args, check=True)
+
+
+def prepare(source, work):
+    work.mkdir(mode=0o700)
+    opt = ('--define', f'_topdir {work}', '--define', f'_tmppath {work}')
+    run('rpm', '-i', '--nodeps', *opt, str(source))
+    spec = work / 'SPECS/kwin.spec'
+    original = spec.read_text()
+    transformed = custom_spec(original)
+    # No stock patch may be skipped by the bounded Fedora autopatch step.
+    if re.search(r'^Patch(?:[1-9][0-9]{2,})\s*:', original, re.M | re.I):
+        raise ValueError('Fedora patch numbering requires review')
+    run('rpmbuild', '-bp', '--nodeps', *opt, str(spec))
+    candidates = list((work / 'BUILD').glob('*/kwin-*/src/backends/libinput/device.cpp'))
+    if len(candidates) != 1:
+        raise ValueError('Could not locate the Fedora-prepared libinput sources')
+    tree = candidates[0].parents[3]
+    reviewed = json.loads((RECIPE / 'reviewed-input.json').read_text())
+    for name, accepted in reviewed.items():
+        if hashlib.sha256((tree / name).read_bytes()).hexdigest() not in accepted:
+            raise ValueError(f'Unreviewed KWin source in {name}; rebase and review required')
+    run('patch', '--dry-run', '--batch', '--forward', '--fuzz=0',
+        '-p1', '-d', str(tree), '-i', str(RECIPE / PATCH))
+    shutil.copyfile(RECIPE / PATCH, work / 'SOURCES' / PATCH)
+    spec.write_text(transformed)
+    # Remove the stock prep tree so the real build runs %prep from scratch.
+    shutil.rmtree(work / 'BUILD')
+    return spec, opt
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('source', type=Path)
+    parser.add_argument('work', type=Path)
+    parser.add_argument('--prepare-only', action='store_true')
+    args = parser.parse_args()
+    if os.geteuid() == 0:
+        parser.error('Use an unprivileged build user')
+    spec, opt = prepare(args.source.resolve(), args.work.resolve())
+    if not args.prepare_only:
+        run('rpmbuild', '-bb', *opt, '--define', '_smp_build_ncpus 4', str(spec))
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f'KWin build: {error}', file=sys.stderr)
+        sys.exit(1)

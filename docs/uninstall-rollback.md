@@ -114,7 +114,8 @@ After a desktop update, follow the
 [update rollback procedure](custom-kwin-update.md#11-roll-back-a-failed-custom-update)
 using stock RPMs matching that desktop base and any installed development/doc
 subpackages. Do not blindly downgrade a newer desktop to the original 6.8.2 RPMs.
-Removing `kwin` packages outright is not the rollback procedure.
+Before a manual rollback, [disable the automatic updater](automatic-kwin-updates.md#disable-or-roll-back)
+if enabled. The PalmReject uninstaller already handles this.
 
 Stock KWin lacks this cancellation API, so filtered startup should refuse to grab
 input. Probe, observation and passthrough remain available. Retain your profile

@@ -11,8 +11,8 @@ drivers are deliberately rejected. Derived from
 This adaptation targets the Apple T2 trackpad identity and driver listed above.
 It uses Linux evdev/uinput, libevdev, libinput and systemd. Filtered operation also
 requires KDE Wayland, Python D-Bus bindings and the companion KWin patch. The
-packaging recipe is pinned to **Fedora kwin-6.8.2-3.fc44**; a different KWin base
-requires source review, patch adaptation and testing. This is not a general-purpose
+manual packaging recipe is pinned to **Fedora kwin-6.8.2-3.fc44**. The optional
+updater builds for compatible Fedora 44 releases, including **6.8.3-1.fc44**. This is not a general-purpose
 palm-rejection tool for arbitrary touchpads or desktops.
 
 ## Current status
@@ -33,8 +33,8 @@ real-desktop behavior is correct.
 Simultaneous pointing with a resting palm is unsupported. The installer enables
 session-aware filtering at login and restores a healthy running session after
 suspend. Runtime failures release input and stay stopped until a new login or
-manual restart. There is no automatic KWin rebuild service. Installing custom
-KWin and launching PalmReject are separate operations.
+manual restart. You can opt in to automatic KWin rebuilds and installation
+after Fedora updates.
 
 ## Getting started
 
@@ -62,6 +62,7 @@ PalmReject alone.
 
 - [Build, calibrate, launch, stop and update PalmReject](docs/palmreject.md)
 - [Build, test and install custom KWin](docs/custom-kwin-build-test-install.md)
+- [Automatically rebuild and install KWin after Fedora updates](docs/automatic-kwin-updates.md)
 - [Maintain custom KWin through Fedora updates](docs/custom-kwin-update.md)
 - [Troubleshoot by symptom](docs/troubleshooting.md)
 - [Stop, uninstall local files or restore stock KWin](docs/uninstall-rollback.md)

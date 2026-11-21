@@ -1,0 +1,2 @@
+# Queue asynchronously so the DNF transaction can release its package lock.
+post_transaction:kwin-*:in::/usr/bin/systemctl --no-block start palmreject-kwin-update.service

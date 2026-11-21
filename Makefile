@@ -25,6 +25,7 @@ test: $(TARGET) tests/test-filter tests/test-input tests/test-gesture
 	python3 tests/test_helper.py
 	python3 tests/test_service.py
 	python3 tests/test_installation.py
+	python3 tests/test_kwin_update.py
 sanitize:
 	$(MAKE) clean
 	$(MAKE) test CFLAGS='-O1 -g -Wall -Wextra -Werror -std=c11 -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
