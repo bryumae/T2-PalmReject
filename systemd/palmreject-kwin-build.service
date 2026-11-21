@@ -4,13 +4,16 @@ PartOf=palmreject-kwin-update.service
 
 [Service]
 Type=oneshot
-DynamicUser=yes
-CacheDirectory=palmreject-kwin-build
+# DynamicUser forces RestrictSUIDSGID, which blocks openat2 on Fedora 44.
+# GNU tar needs that syscall to unpack the signed source during RPM %prep.
+User=palmreject-build
+RestrictSUIDSGID=no
+CacheDirectory=palmreject-kwin-rpmbuild
 CacheDirectoryMode=0700
-WorkingDirectory=/var/cache/palmreject-kwin-build
-Environment=HOME=/var/cache/palmreject-kwin-build
+WorkingDirectory=/var/cache/palmreject-kwin-rpmbuild
+Environment=HOME=/var/cache/palmreject-kwin-rpmbuild
 ExecStartPre=/usr/bin/python3 -I -c 'import os, shutil; shutil.rmtree("work") if os.path.lexists("work") else None'
-ExecStart=/usr/bin/python3 -I /usr/local/libexec/palmreject/kwin/build-update.py /run/palmreject-kwin-update/verified/kwin.src.rpm /var/cache/palmreject-kwin-build/work
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/palmreject/kwin/build-update.py /run/palmreject-kwin-update/verified/kwin.src.rpm /var/cache/palmreject-kwin-rpmbuild/work
 TimeoutStartSec=4h
 Nice=10
 PrivateNetwork=yes
@@ -19,3 +22,5 @@ PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+RemoveIPC=yes

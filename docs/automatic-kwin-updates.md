@@ -19,7 +19,7 @@ From the repository, build PalmReject and follow the
 Install the KWin build dependencies for the current stock release, using its
 signed source RPM and Fedora spec as described in the
 [manual update guide](custom-kwin-update.md#6-review-the-new-fedora-source-before-adapting-the-patch).
-The builder uses these host dependencies. It runs unprivileged in a separate
+The builder uses these host dependencies. It runs under a dedicated system account in a separate
 systemd service with a private network, home and temporary directory. Install
 `dbus-daemon`, the provider of `cmake(Qt6WaylandClientPrivate)`, and
 `python3-libdnf5` if missing. Fedora's optional `libdnf5-plugin-actions` package
@@ -88,5 +88,6 @@ systemctl status palmreject-kwin-update.service --no-pager
 Disabling the timer keeps the installed KWin and PalmReject service. The
 [uninstaller](uninstall-rollback.md) stops the updater and restores the saved
 matching stock RPMs unless you pass `--keep-custom-kwin`. Log out and back in
-after restoring stock KWin. The next ordinary Fedora update can replace the
+after restoring stock KWin. The locked build account is retained with its cache.
+The next ordinary Fedora update can replace the
 custom build without any version locks.

@@ -19,7 +19,7 @@ installation = importlib.util.module_from_spec(module)
 module.loader.exec_module(installation)
 
 RUN = Path('/run/palmreject-kwin-update')
-CACHE = Path('/var/cache/palmreject-kwin-build')
+CACHE = Path(installation.BUILD_CACHE)
 RECIPE = Path(installation.LIBEXEC) / 'kwin'
 FAILED = installation.STATE + '/kwin-update-rejected.json'
 TIMER = 'palmreject-kwin-update.timer'
@@ -207,7 +207,8 @@ def update():
     if any(already):
         raise ValueError('Mixed stock and custom KWin packages; restore a consistent set')
     check_platform(rows)
-    ident = {'packages': rows, 'recipe': {
+    ident = {'packages': rows, 'builder': installation.digest(installation.read_regular(
+        Path('/etc/systemd/system') / BUILDER)), 'recipe': {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(RECIPE.iterdir())
         if p.suffix in ('.py', '.patch', '.json')
     }}
@@ -217,13 +218,14 @@ def update():
         retry.unlink()
         failed.unlink(missing_ok=True)
     if failed.exists() and json.loads(installation.read_regular(failed)) == ident:
+        print(f'Skipping previously rejected KWin build. Inspect journalctl -u {BUILDER} and request a retry after correcting it.', flush=True)
         return
 
     inputs = RUN / 'download'
     inputs.mkdir(mode=0o700)
     verified = RUN / 'verified'
     verified.mkdir()
-    verified.chmod(0o755)  # Traversable by the dynamic build user despite UMask=0077.
+    verified.chmod(0o755)  # Traversable by the build user despite UMask=0077.
     source, stock = download(inputs, rows)
     # Keep a stable root-owned input path. DNF's cache is never mounted into the builder.
     source.rename(verified / 'kwin.src.rpm')
@@ -232,7 +234,7 @@ def update():
     snapshot = rpmdb_snapshot()
     result = execute(['systemctl', 'start', BUILDER], timeout=14460, check=False)
     real_cache = CACHE.resolve()
-    if real_cache not in (CACHE, CACHE.parent / 'private' / CACHE.name):
+    if real_cache != CACHE:
         raise ValueError('Unexpected systemd build cache path')
     if installation.installed_packages() != rows or rpmdb_snapshot() != snapshot:
         print('Installed packages changed during the build; discarding stale build', flush=True)

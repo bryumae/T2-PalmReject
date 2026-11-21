@@ -3,6 +3,7 @@
 """Install/remove root-owned PalmReject files; preserve calibration and recovery data."""
 import argparse
 import fcntl
+import grp
 import hashlib
 import json
 import os
@@ -26,6 +27,8 @@ SETTINGS = '/etc/palmreject/settings.json'
 UNINSTALL = '/usr/local/sbin/palmreject-uninstall'
 FILES = {f'{LIBEXEC}/{name}' for name in ('palmreject', 'gesture-helper.py', 'service-manager.py',
                                         'manage-installation.py')} | {UNIT, PROFILE, SETTINGS, UNINSTALL}
+BUILD_USER = 'palmreject-build'
+BUILD_CACHE = '/var/cache/palmreject-kwin-rpmbuild'
 UPDATE_TIMER = '/etc/systemd/system/palmreject-kwin-update.timer'
 UPDATE_UNITS = (UPDATE_TIMER, '/etc/systemd/system/palmreject-kwin-update.service',
                 '/etc/systemd/system/palmreject-kwin-build.service')
@@ -322,6 +325,19 @@ def stop_all(command=execute):
         time.sleep(0.2)
 
 
+def provision_builder():
+    nologin = '/usr/sbin/nologin'
+    execute(['systemd-sysusers', '--inline',
+             f'u! {BUILD_USER} - "PalmReject KWin builder" {BUILD_CACHE} {nologin}'])
+    account = pwd.getpwnam(BUILD_USER)
+    group = grp.getgrnam(BUILD_USER)
+    if (group.gr_gid != account.pw_gid or not 0 < account.pw_uid < 1000
+            or not 0 < account.pw_gid < 1000
+            or account.pw_dir != BUILD_CACHE or account.pw_shell != nologin
+            or any(BUILD_USER in group.gr_mem for group in grp.getgrall())):
+        raise ValueError(f'Existing {BUILD_USER} is not a dedicated build account')
+
+
 def stop_updater(manifest):
     if manifest and UPDATE_TIMER in manifest['files']:
         # The installation lock excludes a concurrent KWin package transaction.
@@ -381,7 +397,7 @@ def main():
             if (system.get('ID'), system.get('VERSION_ID'), os.uname().machine) != ('fedora', '44', 'x86_64'):
                 raise ValueError('Automatic KWin updates support Fedora 44 x86_64')
             execute(['/usr/bin/python3', '-I', '-c', 'import libdnf5'])
-            for executable in ('rpmbuild', 'rpmkeys', 'dnf5', 'patch', 'dbus-run-session', 'ctest'):
+            for executable in ('rpmbuild', 'rpmkeys', 'dnf5', 'patch', 'dbus-run-session', 'ctest', 'systemd-sysusers'):
                 if not shutil.which(executable):
                     raise ValueError(f'Missing KWin build dependency: {executable}')
         # The updater fetches and records the exact stock rollback set before any
@@ -401,6 +417,8 @@ def main():
         state = execute(['systemctl', 'show', 'palmreject.service', '-p', 'LoadState', '--value'], capture_output=True).stdout.strip()
         if state != 'not-found' and not old:
             raise ValueError('An unmanaged PalmReject service already exists')
+        if auto_update:
+            provision_builder()
         if state != 'not-found':
             execute(['systemctl', 'stop', 'palmreject.service'])
         stop_updater(old)
