@@ -24,15 +24,16 @@ def replace_once(text, pattern, replacement):
 
 
 def custom_spec(text):
-    if re.search(r'^%check\b|^Patch100\s*:', text, re.M | re.I):
-        raise ValueError('Fedora spec already defines %check or Patch100; review required')
+    if re.search(r'^%check\b|^[ \t]*Source100\s*:', text, re.M | re.I):
+        raise ValueError('Fedora spec already defines %check or Source100; review required')
     text = replace_once(text, r'^Release:[ \t]+([0-9]+)%\{\?dist\}$',
                         r'Release: \1.palmreject1%{?dist}')
-    text = replace_once(text, r'^## proposed patches$', f'Patch100: {PATCH}\n\n## proposed patches')
+    text = replace_once(text, r'^## proposed patches$', f'Source100: {PATCH}\n\n## proposed patches')
     text = replace_once(text, r'^# Base$', '# Base\nBuildRequires: dbus-daemon\n'
                         'BuildRequires: cmake(Qt6WaylandClientPrivate)')
-    text = replace_once(text, r'^%autosetup -p1$', '%autosetup -p1 -N\n%autopatch -p1 -M 99\n'
-                        f'patch --batch --forward --fuzz=0 -p1 -i %{{PATCH100}}')
+    # Leave Fedora's patch sequence intact, then apply the separately declared patch.
+    text = replace_once(text, r'^%autosetup -p1$', '%autosetup -p1\n'
+                        'patch --batch --forward --fuzz=0 -p1 -i %{SOURCE100}')
     text = replace_once(text, r'^%cmake_kf6$', '%cmake_kf6 -DBUILD_TESTING=ON '
                         '-DKWIN_BUILD_PALMREJECT_TESTS_ONLY=ON')
     return replace_once(text, r'^%install$', "%check\n"
@@ -54,9 +55,6 @@ def prepare(source, work):
     spec = work / 'SPECS/kwin.spec'
     original = spec.read_text()
     transformed = custom_spec(original)
-    # No stock patch may be skipped by the bounded Fedora autopatch step.
-    if re.search(r'^Patch(?:[1-9][0-9]{2,})\s*:', original, re.M | re.I):
-        raise ValueError('Fedora patch numbering requires review')
     run('rpmbuild', '-bp', '--nodeps', *opt, str(spec))
     candidates = list((work / 'BUILD').glob('*/kwin-*/src/backends/libinput/device.cpp'))
     if len(candidates) != 1:

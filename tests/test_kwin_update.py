@@ -34,8 +34,10 @@ class UpdateTests(unittest.TestCase):
         result = builder.custom_spec(SPEC)
         self.assertIn('Release: 1.palmreject1%{?dist}', result)
         self.assertIn('--fuzz=0', result)
+        self.assertIn('%autosetup -p1\npatch ', result)
+        self.assertIn('Patch100: fedora.patch', builder.custom_spec(SPEC + 'Patch100: fedora.patch\n'))
         self.assertIn('kwin-testLibinputDevice', result)
-        for malformed in (SPEC + '%check\n', SPEC + 'Patch100: other.patch\n',
+        for malformed in (SPEC + '%check\n', SPEC + 'Source100: other.tar\n',
                           SPEC.replace('%autosetup -p1', '%setup -q'),
                           SPEC.replace('%cmake_kf6', '%cmake_kf6 --new-options')):
             with self.subTest(malformed=malformed), self.assertRaises(ValueError):

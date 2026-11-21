@@ -102,9 +102,15 @@ def package_shape(path, custom_release=None, stock_release=None):
             return lines
         return sorted(lines)
 
-    return {option: normalized(option) for option in
-            ('--requires', '--provides', '--conflicts', '--obsoletes', '--filecaps',
-             '--scripts', '--triggers', '--filetriggers')}
+    interfaces = {option: normalized(option) for option in
+                  ('--requires', '--provides', '--conflicts', '--obsoletes', '--recommends',
+                   '--suggests', '--supplements', '--enhances', '--filecaps',
+                   '--scripts', '--triggers', '--filetriggers')}
+    files = rpm_query(path, '--qf', r'[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILEUSERNAME}\t'
+                      r'%{FILEGROUPNAME}\t%{FILEFLAGS}\t%{FILELINKTOS}\n]')
+    interfaces['payload metadata'] = sorted(
+        line for line in files.splitlines() if not line.startswith('/usr/lib/.build-id'))
+    return interfaces
 
 
 def candidates(output, stock, dest):
