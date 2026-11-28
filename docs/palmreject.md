@@ -173,8 +173,8 @@ Permanent operation uses the separate service described below.
 ## Permanent installation
 
 Build/test normally, calibrate, install matching custom KWin, and verify short
-trials and USB recovery devices first. The installer copies reviewed local output;
-it never builds as root, installs dependencies or installs custom KWin for you.
+trials and USB recovery devices first. The installer copies reviewed local output. For automatic KWin builds and
+installation, see the [opt-in updater](automatic-kwin-updates.md).
 Lift all contacts/buttons during handover. From the desktop user's terminal:
 
 ```sh
@@ -205,8 +205,18 @@ access and runs the helper as the desktop user. `--persistent` is an internal
 filter option: it removes trial expiry, not validation or cancellation checks.
 `--check-config FILE` validates a profile offline without accessing devices.
 
-Runtime failure stops the worker/helper and latches that login; there are no
-repeated grabs. A new login or explicit supervisor restart permits another attempt.
+Startup/readiness and runtime failures stop the worker/helper and release input
+before retrying. The supervisor permits five additional attempts with delays of
+5, 10, 20, 40 and 60 seconds. Every attempt repeats physical-device validation,
+idle handover and cancellation readiness. The delays are minimum waits, not
+promises of instant readiness. This also lets a busy trackpad at login recover
+after contacts/buttons lift.
+
+After 60 continuous seconds of healthy filtering, the failure count resets. If all
+five retries fail, filtering stays stopped until a new login or explicit supervisor
+restart. A deliberate successful worker stop is not retried. Stopping/disabling
+the supervisor also cancels all pending attempts. The units retain `Restart=no`;
+the supervisor, rather than systemd's automatic restart policy, owns these retries.
 Switching away from the active session also releases input; returning to an already
 attempted session requires a manual restart. Locking the same active session does
 not itself restart filtering.
@@ -214,7 +224,9 @@ not itself restart filtering.
 Before suspend the supervisor releases input using logind's delay inhibitor and
 worker ordering before T2 suspend services. After wake it waits for those services
 to finish successfully, rediscovers input and restarts only if filtering was healthy
-before sleep. Manual stops and failure latches survive sleep. Logout stops input.
+before sleep. Pending retries pause during sleep and resume only after the hardware
+and selected session are ready. Manual stops and an exhausted retry budget survive
+sleep. Logout stops input and clears that session's retry state.
 The supervisor's own stop/crash stops its bound worker; recognized transient
 leftovers can be recovered on supervisor restart.
 
@@ -228,13 +240,14 @@ sudo systemctl disable --now palmreject.service
 
 `stop` leaves filtering stopped until explicitly started or the next boot; it does
 not return at the next login while the supervisor is stopped. `restart` clears the
-failure latch. `disable --now` also removes boot activation. To enable again:
+retry budget and retries immediately. `disable --now` also removes boot activation. To enable again:
 
 ```sh
 sudo systemctl enable --now palmreject.service
 ```
 
-The supervisor may be active while waiting or after a worker failure. Read its
+The supervisor may be active while waiting, delaying a retry or after exhausting
+its retry budget. Read its
 status text and worker journal; an active supervisor alone is not proof of filtering
 or hands-on acceptance. [Uninstall/rollback](uninstall-rollback.md) covers removal.
 
@@ -263,4 +276,5 @@ editing its profile alone does not update the installation. Unexpectedly modifie
 installed files are preserved and must be inspected before reinstalling; backups
 and manifest records remain available. After a KWin base update, refresh the saved
 rollback set through installation before relying on the uninstaller's package
-rollback. No automatic source update, patch rebase or RPM rebuild is performed.
+rollback when updating manually. The [opt-in updater](automatic-kwin-updates.md)
+refreshes the rollback set when it installs a rebuilt KWin.

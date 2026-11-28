@@ -1,9 +1,17 @@
 # KWin gesture cancellation integration
 
-This patch targets **Fedora kwin-6.8.2-3.fc44** and the inspected
-**libinput-1.31.3-1.fc44**. It adds the device-scoped D-Bus method
+The Fedora 44 patch covers KWin **6.8.2-3.fc44** and **6.8.3-1.fc44** with
+libinput **1.31.3-1.fc44**. The Fedora 45 variant covers KWin **6.8.3-2.fc45**
+with libinput **1.32.0-1.fc45**, where the cancellation handler is registered
+in `Connection::addDevice()`. Both expose the device-scoped D-Bus method
 `org.kde.KWin.InputDevice.cancelTapGestures() -> bool` for the PalmReject
 virtual touchpad only. It is not a general-purpose method for other devices.
+
+The Fedora 45 variant uses the same tap reset as Fedora 44. In libinput 1.32.0,
+disabling tapping releases held tap buttons and resets the tap state. Re-enabling
+it marks existing touches as palms, so they cannot complete a cancelled tap.
+The build checks the hashes of the Fedora-prepared files before applying the
+release-specific patch.
 
 The method drains preceding input, temporarily resets tapping through libinput,
 restores its original value, and delivers queued button releases. These operations
@@ -23,7 +31,9 @@ it cannot undo clicks or actions already delivered to applications.
   preserving rollback packages, reviewing a new source base, rebasing the patch,
   updating the pinned recipe, rebuilding, installation and recovery.
 
-The preparation script currently accepts only `kwin-6.8.2-3.fc44`. It does not
+The [optional updater](../../docs/automatic-kwin-updates.md) uses the guarded
+recipe in `build-update.py` and the reviewed file fingerprints alongside it.
+The original manual preparation script accepts only `kwin-6.8.2-3.fc44`. It does not
 rebase the patch for another version. The convenience build wrapper always uses
 `artifacts/kwin-build`; the update guide uses direct `rpmbuild` commands for new
 version-specific build directories.
@@ -50,16 +60,16 @@ including drag lock; releasing an item can drop it at its current position.
 Previously completed actions cannot be undone. The filter keeps its global palm
 lock until physical contacts and buttons release.
 
-There is no automatic patch-rebase/rebuild service. A separate
+The updater rebuilds only reviewed source layouts. A separate
 [installer](../../docs/palmreject.md#permanent-installation) enables session-aware
 PalmReject startup at boot/login. A later stock KWin update can remove the interface;
 filtered startup must then fail before grabbing input. Rebase and retest against
 the new sources rather than indefinitely freezing desktop updates.
 
-## Current installation status
+## Fedora 44 desktop validation
 
-The [2026-11-07 validation](../../docs/kwin-validation-2026-11-07.md) confirms
-custom KWin is installed and running and exposes cancellation on the actual
+The [2026-11-07 validation](../../docs/kwin-validation-2026-11-07.md) recorded
+custom KWin running with cancellation exposed on the actual
 virtual touchpad. Automated checks passed; full desktop acceptance remains
 unfinished. See [troubleshooting](../../docs/troubleshooting.md) and
 [rollback](../../docs/uninstall-rollback.md) for operational guidance.

@@ -145,6 +145,23 @@ class InstallationTests(unittest.TestCase):
         self.assertEqual(self.invoke(['uninstall', '--dry-run']), 0)
         self.assertEqual(before, {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()})
         self.assertFalse(any(c[0] in ('systemctl', 'dnf') for c in self.commands.calls))
+    def test_stock_kwin_recovery_can_opt_in_without_cached_rollback(self):
+        self.commands.installed = [install.stock_row(p) for p in CUSTOM]
+        args = ['install', '--dry-run', '--config', '/unused', '--session-uid', '1000']
+        with self.assertRaisesRegex(ValueError, 'Install the matching custom KWin'):
+            self.invoke(args)
+        with patch.object(install.platform, 'freedesktop_os_release',
+                          return_value={'ID': 'fedora', 'VERSION_ID': '44'}), \
+             patch.object(install, 'fedora_signing_key'):
+            self.invoke([*args, '--enable-kwin-updates'])
+        self.assertFalse(self.instance.path(install.MANIFEST).exists())
+    def test_uninstall_disables_updater_before_package_rollback(self):
+        self.install()
+        self.invoke(['uninstall'])
+        stop = self.commands.calls.index(['systemctl', 'disable', '--now',
+                                          'palmreject-kwin-update.timer'])
+        update = next(i for i, c in enumerate(self.commands.calls) if c[0] == 'dnf')
+        self.assertLess(stop, update)
     def test_dnf_failure_leaves_recovery_tools_and_manifest(self):
         manifest = self.install()
         self.commands.fail_dnf = True

@@ -1,7 +1,7 @@
 # T2 PalmReject — Fedora MacBookPro16,1
 
 Experimental userspace palm rejection for **MacBookPro16,1, Apple 05ac:0340**,
-using `t2_precision_trackpad` on **Fedora 44 / KDE Wayland**. Other models and
+using `t2_precision_trackpad` on **Fedora 44 or 45 / KDE Wayland**. Other models and
 drivers are deliberately rejected. Derived from
 [r2car/T2-PalmReject](https://github.com/r2car/T2-PalmReject), reviewed at
 `75b31901cf9e4c1e9336c51fc61347d988af5fe4`.
@@ -11,9 +11,10 @@ drivers are deliberately rejected. Derived from
 This adaptation targets the Apple T2 trackpad identity and driver listed above.
 It uses Linux evdev/uinput, libevdev, libinput and systemd. Filtered operation also
 requires KDE Wayland, Python D-Bus bindings and the companion KWin patch. The
-packaging recipe is pinned to **Fedora kwin-6.8.2-3.fc44**; a different KWin base
-requires source review, patch adaptation and testing. This is not a general-purpose
-palm-rejection tool for arbitrary touchpads or desktops.
+manual packaging recipe is pinned to **Fedora kwin-6.8.2-3.fc44**. The optional
+updater has separate recipes for **Fedora 44 and 45 x86_64**, including KWin
+**6.8.3-1.fc44** and **6.8.3-2.fc45**. Each build must pass the source and
+package checks before installation.
 
 ## Current status
 
@@ -32,9 +33,10 @@ real-desktop behavior is correct.
 
 Simultaneous pointing with a resting palm is unsupported. The installer enables
 session-aware filtering at login and restores a healthy running session after
-suspend. Runtime failures release input and stay stopped until a new login or
-manual restart. There is no automatic KWin rebuild service. Installing custom
-KWin and launching PalmReject are separate operations.
+suspend. Failures release input before up to five automatic retries, delayed by
+5, 10, 20, 40 and 60 seconds. A minute of healthy filtering resets the retry budget.
+Exhaustion requires a new login or manual restart. Manual stops stay stopped.
+Automatic KWin rebuilds are available for reviewed Fedora builds.
 
 ## Getting started
 
@@ -62,12 +64,14 @@ PalmReject alone.
 
 - [Build, calibrate, launch, stop and update PalmReject](docs/palmreject.md)
 - [Build, test and install custom KWin](docs/custom-kwin-build-test-install.md)
+- [Automatically rebuild and install KWin after Fedora updates](docs/automatic-kwin-updates.md)
 - [Maintain custom KWin through Fedora updates](docs/custom-kwin-update.md)
 - [Troubleshoot by symptom](docs/troubleshooting.md)
 - [Stop, uninstall local files or restore stock KWin](docs/uninstall-rollback.md)
 - [KWin cancellation design and packaging](packaging/kwin/README.md)
 - [Dated validation and remaining acceptance checks](docs/kwin-validation-2026-11-07.md)
 - [Historical implementation and security records](docs/history/README.md)
+- [Upstream feature comparison and issue backlog](docs/upstream-feature-comparison.md)
 
 ## How input flows
 
@@ -115,6 +119,7 @@ loss resets virtual state and waits for idle. Recovery still needs hands-on chec
 | `docs/troubleshooting.md` | Diagnostics and symptom-specific fixes. |
 | `docs/uninstall-rollback.md` | Stop, local removal and stock KWin recovery. |
 | `docs/kwin-validation-2026-11-07.md` | Retained dated evidence and open findings. |
+| `docs/upstream-feature-comparison.md` | Upstream feature parity, intentional differences and input issue backlog. |
 | `docs/history/` | Historical implementation plan and security review, not current setup instructions. |
 | `src/main.c` | CLI, physical discovery, event loop and trial lifecycle. |
 | `src/filter.c` | Profile parser, classifier and global palm lock. |

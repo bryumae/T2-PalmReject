@@ -20,6 +20,8 @@ OWNERSHIP = pathlib.Path('/run/palmreject-worker-owned')
 WORKER = 'palmreject-input.service'
 DESCRIPTION = 'PalmReject restricted persistent input worker'
 HARDWARE_UNITS = ('kait2en-suspend.service', 't2-services-suspend.service', 'sleep.target')
+RETRY_DELAYS = (5, 10, 20, 40, 60)
+HEALTHY_RESET_SECONDS = 60
 
 
 def run(args, **kwargs):
@@ -36,10 +38,13 @@ def notify(message):
 
 
 class Lifecycle:
-    """One attempt per login; sleep can restore a previously healthy attempt."""
+    """Bounded delayed retries; manual stops and sleep retain their intent."""
     def __init__(self, backend):
         self.backend = backend
         self.attempted = set()
+        self.failures = {}
+        self.retry_at = {}
+        self.healthy_since = None
         self.session = None
         self.phase = 'waiting'
         self.deadline = 0
@@ -52,16 +57,32 @@ class Lifecycle:
             self.phase = phase
             self.backend.status(detail)
 
-    def fail(self, error):
+    def fail(self, error, now=None):
         self.backend.stop()
-        if self.session:
-            self.attempted.add(self.session)
-        self.status('failed', f'Failed: {error}; restart service or log in again')
+        self.healthy_since = None
+        if self.session is None:
+            self.status('failed', f'Failed: {error}; waiting for session recovery')
+            return
+        now = time.monotonic() if now is None else now
+        self.attempted.add(self.session)
+        count = self.failures.get(self.session, 0) + 1
+        self.failures[self.session] = count
+        if count <= len(RETRY_DELAYS):
+            delay = RETRY_DELAYS[count - 1]
+            self.retry_at[self.session] = now + delay
+            # Report each newly scheduled attempt even if the previous phase
+            # was also retrying (for example a readiness check raised).
+            self.phase = 'retrying'
+            self.backend.status(f'Retry {count}/{len(RETRY_DELAYS)} in {delay}s after failure: {error}')
+        else:
+            self.retry_at.pop(self.session, None)
+            self.status('failed', f'Failed: {error}; retry limit reached, restart service or log in again')
 
     def sleep(self, preparing):
         if preparing:
             self.sleeping = True
             self.resume = self.session if self.phase == 'filtering' and self.backend.alive() else None
+            self.healthy_since = None
             self.backend.stop()
             self.status('suspended', 'Suspended; physical input released')
         else:
@@ -71,6 +92,8 @@ class Lifecycle:
     def tick(self, sessions, now):
         existing = {session for session, active in sessions}
         self.attempted.intersection_update(existing)
+        self.failures = {key: value for key, value in self.failures.items() if key in existing}
+        self.retry_at = {key: value for key, value in self.retry_at.items() if key in existing}
         if self.sleeping:
             return
         if self.waking:
@@ -81,34 +104,58 @@ class Lifecycle:
             self.resume = None
             self.waking = False
             self.deadline = now + 60
+            self.status('waiting', 'Resumed; waiting for session readiness or scheduled retry')
         active = [session for session, enabled in sessions if enabled]
         selected = active[0] if len(active) == 1 else None
         if selected != self.session:
             self.backend.stop()
             self.session = selected
+            self.healthy_since = None
             self.deadline = now + 60
             self.status('waiting', 'Waiting for exactly one active Wayland session and KWin')
         if selected is None:
             return
         if self.phase in ('starting', 'filtering'):
             if not self.backend.alive():
-                self.fail('input worker or helper exited')
+                if self.backend.exit_is_failure():
+                    self.fail('input worker or helper exited', now)
+                else:
+                    self.backend.stop()
+                    self.healthy_since = None
+                    self.status('stopped', 'Stopped for this login; restart service to retry')
             elif self.backend.ready():
                 self.status('filtering', f'Filtering for session {selected}')
+                if self.healthy_since is None:
+                    self.healthy_since = now
+                elif now - self.healthy_since >= HEALTHY_RESET_SECONDS:
+                    self.failures.pop(selected, None)
             elif now >= self.deadline:
-                self.fail('input/cancellation readiness timed out')
+                self.fail('input/cancellation readiness timed out', now)
             return
+        if selected in self.retry_at:
+            if now < self.retry_at[selected]:
+                return
+            self.retry_at.pop(selected)
+            self.attempted.discard(selected)
+            self.deadline = now + 60
+            self.status('waiting', 'Retrying; waiting for KWin readiness')
         if selected in self.attempted:
-            self.status('failed', 'Stopped for this login; restart service to retry')
+            if self.failures.get(selected, 0) > len(RETRY_DELAYS):
+                self.status('failed', 'Failed: retry limit reached; restart service or log in again')
+            else:
+                self.status('stopped', 'Stopped for this login; restart service to retry')
             return
         if self.backend.session_ready():
             self.attempted.add(selected)
-            self.backend.start()
+            try:
+                self.backend.start()
+            except Exception as error:
+                self.fail(error, now)
+                return
             self.deadline = now + 30
             self.status('starting', 'Starting restricted input worker; waiting for cancellation readiness')
         elif now >= self.deadline:
-            self.attempted.add(selected)
-            self.status('failed', 'KWin/user bus not ready within 60 seconds; restart service to retry')
+            self.fail('KWin/user bus not ready within 60 seconds', now)
 
 
 class Backend:
@@ -215,6 +262,13 @@ class Backend:
     def alive(self):
         return self.started and self.properties(WORKER).get('ActiveState') == 'active' and (
             self.helper is None or self.helper.poll() is None)
+
+    def exit_is_failure(self):
+        props = self.properties(WORKER)
+        # A deliberately stopped worker exits successfully. A helper exiting
+        # while its worker still runs is an unexpected loss of cancellation.
+        return (props.get('ActiveState') == 'active' or
+                props.get('Result', 'success') != 'success')
 
     def ready(self):
         state = RUNTIME / 'state'

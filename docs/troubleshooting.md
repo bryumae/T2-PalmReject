@@ -28,11 +28,17 @@ journalctl -u palmreject.service -u palmreject-input.service -n 100 --no-pager
 ```
 
 The supervisor can be waiting for the configured session, paused for sleep/T2
-resume, or holding a failure latch. Read its status text, not just `active`.
-A missing worker while waiting is expected. Missing KWin integration, non-idle
-handover, helper failure or timeout leaves physical input available and does not
-loop retries. After fixing the cause, use `sudo systemctl restart palmreject.service`.
-A new login also permits a new attempt if the supervisor itself remains running.
+resume, delaying a retry or holding an exhausted retry budget. Read its status
+text, not just `active`. A missing worker while waiting or between retries is
+expected. Startup/runtime failure releases physical input and schedules up to five
+additional attempts after 5, 10, 20, 40 and 60 seconds. Keep all contacts/buttons
+released during startup. A busy handover no longer permanently blocks the first
+login attempt. Every retry still checks KWin cancellation before grabbing.
+
+A minute of healthy filtering resets the budget. After exhaustion, fix the cause
+and use `sudo systemctl restart palmreject.service`, or start a new login while the
+supervisor remains running. Manual successful worker stops are not retried;
+stopping/disabling the supervisor cancels its retry schedule.
 
 Stop the supervisor before running trials; both launchers share a lifecycle lock.
 Manual supervisor stops do not automatically resume after sleep. If T2 resume
@@ -108,7 +114,8 @@ validates the actual KWin owner/interface instead. Check per-session metadata wi
 means stock/old KWin is running or device identity/API checks failed. Confirm all
 runtime packages match. Installing custom RPMs does not replace the running
 compositor: log out/in normally when ready. A later stock update can remove the
-API; follow the [KWin update guide](custom-kwin-update.md). Do not bypass this gate
+API. Use the [automatic updater](automatic-kwin-updates.md) or follow the
+[manual KWin update guide](custom-kwin-update.md). Do not bypass this gate
 or replace the running compositor in place. Probe/observe/passthrough do not need
 the cancellation API.
 

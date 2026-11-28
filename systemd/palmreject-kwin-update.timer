@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for stock Fedora KWin updates for PalmReject
+
+[Timer]
+OnBootSec=2min
+OnActiveSec=30s
+OnCalendar=*:0/15
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

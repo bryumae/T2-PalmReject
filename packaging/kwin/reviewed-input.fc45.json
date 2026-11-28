@@ -1,0 +1,23 @@
+{
+  "src/backends/libinput/device.h": [
+    "6cb6638840ddb7f3eacba63349aa749ee986c6086ad4e20e1ad3d77256edc21c"
+  ],
+  "src/backends/libinput/device.cpp": [
+    "d6ca7c85a0c87d171353659d79566639bb21706c11c41a1720b698ee1188dc64"
+  ],
+  "src/backends/libinput/connection.cpp": [
+    "cba19cec18e6572368bbf27c56e8a2b52d5ed622fbba9cb46ffd07454e85a8be"
+  ],
+  "autotests/libinput/mock_libinput.h": [
+    "60457cf2b4baeb1425553c9f4004777801407c3d4edf4e0a3c2635a44553ad75"
+  ],
+  "autotests/libinput/mock_libinput.cpp": [
+    "dca2c2a46793c3121c6ea274d9bed5858d433bd5044b149d18acb54f3452e0c2"
+  ],
+  "autotests/libinput/device_test.cpp": [
+    "1b4dc4da5519568222ab44f0d6b7f329a3a98785ee1f3eaf0475c9b0e4002f80"
+  ],
+  "autotests/CMakeLists.txt": [
+    "503b36a895b68c95c071812898ce5592b5291fcf940fb02f35a26f596847162f"
+  ]
+}

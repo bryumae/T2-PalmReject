@@ -18,6 +18,7 @@ class Backend:
         self.is_ready = True
         self.kwin = True
         self.hardware = True
+        self.failed = True
         self.messages = []
     def start(self):
         self.started += 1
@@ -27,6 +28,8 @@ class Backend:
         self.running = False
     def alive(self):
         return self.running
+    def exit_is_failure(self):
+        return self.failed
     def ready(self):
         return self.is_ready
     def session_ready(self):
@@ -59,27 +62,32 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(self.backend.started, 0)
         self.life.tick([('s2', True)], 65)
         self.assertEqual(self.backend.started, 1)
-    def test_failure_latches_until_new_login(self):
+    def test_failure_retries_only_after_delay_and_while_session_active(self):
         self.start()
         self.backend.running = False
         self.life.tick([('s1', True)], 3)
-        self.assertEqual(self.life.phase, 'failed')
+        self.assertEqual(self.life.phase, 'retrying')
         self.life.tick([('s1', False)], 4)
         self.life.tick([('s1', True)], 5)
         self.assertEqual(self.backend.started, 1)
-        self.life.tick([('s2', True)], 6)
+        self.life.tick([('s1', False)], 8)
+        self.assertEqual(self.backend.started, 1)
+        self.life.tick([('s1', True)], 9)
         self.assertEqual(self.backend.started, 2)
     def test_logout_releases_input(self):
         self.start()
         self.life.tick([], 3)
         self.assertFalse(self.backend.running)
-    def test_missing_cancellation_or_helper_timeout_stops_once(self):
+    def test_missing_cancellation_or_helper_timeout_retries_with_new_deadline(self):
         self.backend.is_ready = False
         self.life.tick([('s1', True)], 1)
         self.life.tick([('s1', True)], 31)
         self.assertFalse(self.backend.running)
         self.life.tick([('s1', True)], 32)
         self.assertEqual(self.backend.started, 1)
+        self.life.tick([('s1', True)], 36)
+        self.assertEqual(self.backend.started, 2)
+        self.assertEqual(self.life.deadline, 66)
     def test_sleep_waits_for_hardware_and_resumes_healthy_worker(self):
         self.start()
         self.life.sleep(True)
@@ -101,6 +109,98 @@ class LifecycleTests(unittest.TestCase):
         self.life.sleep(False)
         self.life.tick([('s1', True)], 20)
         self.assertEqual(self.backend.started, 1)
+    def test_successful_worker_stop_is_not_retried(self):
+        self.start()
+        self.backend.running = False
+        self.backend.failed = False
+        self.life.tick([('s1', True)], 3)
+        self.assertEqual(self.life.phase, 'stopped')
+        self.life.tick([('s1', True)], 1000)
+        self.assertEqual(self.backend.started, 1)
+    def test_retry_limit_and_exponential_delays(self):
+        self.start()
+        now = 3
+        for retry, delay in enumerate(service.RETRY_DELAYS, 1):
+            self.backend.running = False
+            self.life.tick([('s1', True)], now)
+            self.assertEqual(self.life.retry_at['s1'], now + delay)
+            self.life.tick([('s1', True)], now + delay - 0.1)
+            self.assertEqual(self.backend.started, retry)
+            now += delay
+            self.life.tick([('s1', True)], now)
+            self.assertEqual(self.backend.started, retry + 1)
+            self.life.tick([('s1', True)], now + 1)
+            now += 2
+        self.backend.running = False
+        self.life.tick([('s1', True)], now)
+        self.assertEqual(self.life.phase, 'failed')
+        self.assertNotIn('s1', self.life.retry_at)
+        self.life.tick([('s1', True)], now + 10000)
+        self.assertEqual(self.backend.started, 6)
+        self.life.tick([('s2', True)], now + 10001)
+        self.assertEqual(self.backend.started, 7)
+    def test_healthy_operation_resets_retry_budget(self):
+        self.start()
+        self.backend.running = False
+        self.life.tick([('s1', True)], 3)
+        self.life.tick([('s1', True)], 8)
+        self.life.tick([('s1', True)], 9)
+        self.assertEqual(self.life.failures['s1'], 1)
+        self.life.tick([('s1', True)], 68)
+        self.assertEqual(self.life.failures['s1'], 1)
+        self.life.tick([('s1', True)], 69)
+        self.assertNotIn('s1', self.life.failures)
+        self.backend.running = False
+        self.life.tick([('s1', True)], 70)
+        self.assertEqual(self.life.retry_at['s1'], 75)
+    def test_pending_retry_waits_for_sleep_and_hardware(self):
+        self.start()
+        self.backend.running = False
+        self.life.tick([('s1', True)], 3)
+        self.life.sleep(True)
+        self.life.tick([('s1', True)], 20)
+        self.assertEqual(self.backend.started, 1)
+        self.life.sleep(False)
+        self.backend.hardware = False
+        self.life.tick([('s1', True)], 21)
+        self.assertEqual(self.backend.started, 1)
+        self.backend.hardware = True
+        self.life.tick([('s1', True)], 22)
+        self.assertEqual(self.backend.started, 2)
+    def test_start_exception_schedules_retry_after_cleanup(self):
+        self.backend.start = Mock(side_effect=RuntimeError('busy trackpad'))
+        self.life.tick([('s1', True)], 1)
+        self.assertEqual(self.life.phase, 'retrying')
+        self.assertFalse(self.backend.running)
+        self.assertEqual(self.life.retry_at['s1'], 6)
+    def test_readiness_timeout_retries(self):
+        self.backend.kwin = False
+        self.life.tick([('s1', True)], 1)
+        self.life.tick([('s1', True)], 61)
+        self.assertEqual(self.life.phase, 'retrying')
+        self.backend.kwin = True
+        self.life.tick([('s1', True)], 65)
+        self.assertEqual(self.backend.started, 0)
+        self.life.tick([('s1', True)], 66)
+        self.assertEqual(self.backend.started, 1)
+    def test_exhausted_budget_survives_suspend(self):
+        self.start()
+        for now in range(len(service.RETRY_DELAYS) + 1):
+            self.life.fail('persistent failure', now)
+        self.life.sleep(True)
+        self.life.sleep(False)
+        self.life.tick([('s1', True)], 1000)
+        self.assertEqual(self.life.phase, 'failed')
+        self.assertEqual(self.backend.started, 1)
+    def test_backend_distinguishes_failure_from_successful_stop(self):
+        backend = service.Backend(1000)
+        for props, expected in [
+                ({'ActiveState': 'failed', 'Result': 'exit-code'}, True),
+                ({'ActiveState': 'active', 'Result': 'success'}, True),
+                ({'ActiveState': 'inactive', 'Result': 'success'}, False),
+                ({'LoadState': 'not-found', 'ActiveState': 'inactive'}, False)]:
+            backend.properties = Mock(return_value=props)
+            self.assertEqual(backend.exit_is_failure(), expected)
     def test_restart_supervisor_permits_retry(self):
         self.start()
         self.life.fail('helper failure')

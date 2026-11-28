@@ -2,6 +2,12 @@
 
 ## Fedora experimental adaptation
 
+- Port KWin tap cancellation and the optional package updater to Fedora 45 x86_64.
+  Select Fedora-specific patches, reviewed sources, and signing keys.
+
+- Retry failed persistent startup/runtime filtering up to five times with delayed
+  attempts; reset the budget after one healthy minute and preserve manual stops.
+
 - Add permanent session-aware filtering with an explicit persistent mode, protected
   worker/helper lifecycle, login activation and ordered suspend/resume handling.
 - Enable root-owned installation/upgrades and manifested removal with signed,
